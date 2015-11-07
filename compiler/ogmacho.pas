@@ -146,11 +146,14 @@ type
 
     TMachoAssembler=class(TInternalAssembler)
       public
-        constructor create(smart:boolean);override;
+        constructor create(info: pasminfo; smart:boolean);override;
       end;
 
 
 implementation
+
+uses
+  owar;
 
   { TmachoObjData }
 
@@ -351,10 +354,11 @@ implementation
 
   { TMachoAssembler }
 
-  constructor TMachoAssembler.create(smart: boolean);
+  constructor TMachoAssembler.create(info: pasminfo; smart: boolean);
     begin
-      inherited create(smart);
+      inherited;
       CObjOutput:=TMachoObjectOutput;
+      CInternalAr:=tarobjectwriter;
     end;
 
 

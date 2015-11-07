@@ -817,7 +817,7 @@ begin
   len := length(src);
   { make sure we don't dereference src if it can be nil (JM) }
   if len > 0 then
-    widestringmanager.ansi2widemoveproc(pchar(@src[1]),StringCodePage(src),temp,len);
+    widestringmanager.ansi2widemoveproc(pchar(@src[1]),TranslatePlaceholderCP(StringCodePage(src)),temp,len);
   len := length(temp);
   if len > length(res) then
     len := length(res);
@@ -1351,7 +1351,7 @@ end;
 
 {$ifndef FPC_HAS_SETSTRING_UNICODESTR_PUNICODECHAR}
 {$define FPC_HAS_SETSTRING_UNICODESTR_PUNICODECHAR}
-Procedure SetString (Out S : UnicodeString; Buf : PUnicodeChar; Len : SizeInt);
+Procedure {$ifdef FPC_HAS_CPSTRING}fpc_setstring_unicodestr_pwidechar{$else}SetString{$endif}(Out S : UnicodeString; Buf : PUnicodeChar; Len : SizeInt); {$ifdef FPC_HAS_CPSTRING} compilerproc; {$endif FPC_HAS_CPSTRING}
 begin
   SetLength(S,Len);
   If (Buf<>Nil) and (Len>0) then
@@ -1362,7 +1362,7 @@ end;
 
 {$ifndef FPC_HAS_SETSTRING_UNICODESTR_PCHAR}
 {$define FPC_HAS_SETSTRING_UNICODESTR_PCHAR}
-Procedure SetString (Out S : UnicodeString; Buf : PChar; Len : SizeInt);
+Procedure {$ifdef FPC_HAS_CPSTRING}fpc_setstring_unicodestr_pansichar{$else}SetString{$endif}(Out S : UnicodeString; Buf : PChar; Len : SizeInt); {$ifdef FPC_HAS_CPSTRING} compilerproc; {$endif FPC_HAS_CPSTRING}
 begin
   If (Buf<>Nil) and (Len>0) then
     widestringmanager.Ansi2UnicodeMoveProc(Buf,DefaultSystemCodePage,S,Len)
@@ -1577,7 +1577,6 @@ begin
   s:=UnicodeString(ss);
 end;
 
-{$ifdef FPC_HAS_STR_CURRENCY}
 procedure fpc_UnicodeStr_Currency(c : Currency;len,fr : SizeInt;out s : UnicodeString);compilerproc;
 var
   ss: shortstring;
@@ -1585,7 +1584,6 @@ begin
   str(c:len:fr,ss);
   s:=UnicodeString(ss);
 end;
-{$endif FPC_HAS_STR_CURRENCY}
 
 Procedure fpc_UnicodeStr_SInt(v : ValSint; Len : SizeInt; out S : UnicodeString);compilerproc;
 Var
@@ -2195,7 +2193,7 @@ begin
   for i:=0 to length(s)-2 do  { -2 because s contains explicit terminating #0 }
     begin
       nc:=s[i];
-      if (nc<$ffff) then
+      if (nc<=$ffff) then
         dest^:=widechar(nc)
       else if (dword(nc)<=$10ffff) then
         begin
@@ -2286,19 +2284,22 @@ function StringCodePage(const S: UnicodeString): TSystemCodePage; overload;
 
 
 {$warnings off}
-function GenericUnicodeCase(const s : UnicodeString) : UnicodeString;
+function StubUnicodeCase(const s : UnicodeString) : UnicodeString;
   begin
     unimplementedunicodestring;
   end;
 
-
-function CompareUnicodeString(const s1, s2 : UnicodeString) : PtrInt;
+function StubCompareUnicodeString(const s1, s2 : UnicodeString) : PtrInt;
   begin
     unimplementedunicodestring;
   end;
 
+function StubWideCase(const s: WideString): WideString;
+  begin
+    unimplementedunicodestring;
+  end;
 
-function CompareTextUnicodeString(const s1, s2 : UnicodeString): PtrInt;
+function StubCompareWideString(const s1, s2 : WideString) : PtrInt;
   begin
     unimplementedunicodestring;
   end;
@@ -2307,24 +2308,23 @@ function CompareTextUnicodeString(const s1, s2 : UnicodeString): PtrInt;
 procedure initunicodestringmanager;
   begin
 {$ifndef HAS_WIDESTRINGMANAGER}
+{$ifdef FPC_WIDESTRING_EQUAL_UNICODESTRING}
+    widestringmanager.Ansi2WideMoveProc:=@defaultAnsi2UnicodeMove;
+{$else FPC_WIDESTRING_EQUAL_UNICODESTRING}
+    widestringmanager.Ansi2WideMoveProc:=@DefaultAnsi2WideMove;
+{$endif FPC_WIDESTRING_EQUAL_UNICODESTRING}
+    widestringmanager.Wide2AnsiMoveProc:=@DefaultUnicode2AnsiMove;
+    widestringmanager.UpperWideStringProc:=@StubWideCase;
+    widestringmanager.LowerWideStringProc:=@StubWideCase;
     widestringmanager.Unicode2AnsiMoveProc:=@DefaultUnicode2AnsiMove;
     widestringmanager.Ansi2UnicodeMoveProc:=@DefaultAnsi2UnicodeMove;
-    widestringmanager.UpperUnicodeStringProc:=@GenericUnicodeCase;
-    widestringmanager.LowerUnicodeStringProc:=@GenericUnicodeCase;
+    widestringmanager.UpperUnicodeStringProc:=@StubUnicodeCase;
+    widestringmanager.LowerUnicodeStringProc:=@StubUnicodeCase;
 {$endif HAS_WIDESTRINGMANAGER}
-    widestringmanager.CompareUnicodeStringProc:=@CompareUnicodeString;
-    widestringmanager.CompareTextUnicodeStringProc:=@CompareTextUnicodeString;
-
-{$ifdef FPC_WIDESTRING_EQUAL_UNICODESTRING}
-{$ifndef HAS_WIDESTRINGMANAGER}
-    widestringmanager.Wide2AnsiMoveProc:=@defaultUnicode2AnsiMove;
-    widestringmanager.Ansi2WideMoveProc:=@defaultAnsi2UnicodeMove;
-    widestringmanager.UpperWideStringProc:=@GenericUnicodeCase;
-    widestringmanager.LowerWideStringProc:=@GenericUnicodeCase;
-{$endif HAS_WIDESTRINGMANAGER}
-    widestringmanager.CompareWideStringProc:=@CompareUnicodeString;
-    widestringmanager.CompareTextWideStringProc:=@CompareTextUnicodeString;
-{$endif FPC_WIDESTRING_EQUAL_UNICODESTRING}
+    widestringmanager.CompareWideStringProc:=@StubCompareWideString;
+    widestringmanager.CompareTextWideStringProc:=@StubCompareWideString;
+    widestringmanager.CompareUnicodeStringProc:=@StubCompareUnicodeString;
+    widestringmanager.CompareTextUnicodeStringProc:=@StubCompareUnicodeString;
     widestringmanager.CharLengthPCharProc:=@DefaultCharLengthPChar;
     widestringmanager.CodePointLengthProc:=@DefaultCodePointLength;
     widestringmanager.GetStandardCodePageProc:=@DefaultGetStandardCodePage;

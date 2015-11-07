@@ -28,7 +28,8 @@ interface
 {$MODESWITCH OUT}
 { force ansistrings }
 {$H+}
-
+{$DEFINE HAS_OSERROR}
+{$DEFINE HAS_SLEEP}
 { used OS file system APIs use ansistring }
 {$define SYSUTILS_HAS_ANSISTR_FILEUTIL_IMPL}
 { OS has an ansistring/single byte environment variable API }
@@ -41,7 +42,7 @@ implementation
 
 uses
   sysconst;
-    
+
 { Include platform independent implementation part }
 {$i sysutils.inc}
 
@@ -196,7 +197,7 @@ begin
   result := -1;
 end;
 
-Procedure InternalFindClose(var Handle: Pointer);
+Procedure InternalFindClose(var Handle: THandle);
 begin
 
 end;
@@ -259,7 +260,24 @@ Procedure SysBeep;
 begin
 end;
 
-
+Procedure Sleep(Milliseconds : Cardinal);
+var
+  i,j : Cardinal;
+  calib : Cardinal;
+begin
+{ $warning no idea if this calibration value is correct (FK) }
+{ I estimated it roughly on the CPU clock of 16 MHz and 1+3 clock cycles for the loop }
+{ 
+  calib:=4000000;
+  for i:=1 to Milliseconds do
+    asm
+      ldr r0,calib
+    .L1:
+      sub r0,r0,#1
+      bne .L1
+    end;
+    }
+end;
 {****************************************************************************
                               Locale Functions
 ****************************************************************************}
@@ -299,13 +317,15 @@ begin
   result := -1;
 end;
 
-function ExecuteProcess (const Path: AnsiString;
-                                  const ComLine: array of AnsiString;Flags:TExecuteFlags=[]): integer;
+function ExecuteProcess (const Path: AnsiString; const ComLine: array of AnsiString;Flags:TExecuteFlags=[]): integer;
 begin
   result := -1;
 end;
 
-
+function GetLastOSError: Integer;
+begin
+  Result := -1;
+end;
 {****************************************************************************
                               Initialization code
 ****************************************************************************}

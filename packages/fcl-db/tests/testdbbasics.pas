@@ -8,7 +8,7 @@ interface
 
 uses
 {$IFDEF FPC}
-  fpcunit, testregistry,
+  testregistry,
 {$ELSE FPC}
   TestFramework,
 {$ENDIF FPC}
@@ -58,6 +58,7 @@ type
     procedure TestAssignFieldftFixedChar;
     procedure TestSelectQueryBasics;
     procedure TestPostOnlyInEditState;
+    procedure TestCancel;
     procedure TestMove;                    // bug 5048
     procedure TestActiveBufferWhenClosed;
     procedure TestEOFBOFClosedDataset;
@@ -138,6 +139,7 @@ type
 
     procedure TestBookmarks;
     procedure TestBookmarkValid;
+    procedure TestCompareBookmarks;
 
     procedure TestDelete1;
     procedure TestDelete2;
@@ -199,7 +201,7 @@ type THackDataLink=class(TDataLink);
 
 procedure TTestCursorDBBasics.TestAppendOnEmptyDataset;
 begin
-  with DBConnector.GetNDataset(0) do
+  with DBConnector.GetNDataset(True,0) do
     begin
     open;
     CheckTrue(CanModify);
@@ -217,7 +219,7 @@ end;
 
 procedure TTestCursorDBBasics.TestInsertOnEmptyDataset;
 begin
-  with DBConnector.GetNDataset(0) do
+  with DBConnector.GetNDataset(True,0) do
     begin
     open;
     CheckTrue(CanModify);
@@ -272,6 +274,18 @@ begin
     open;
     CheckException(Post,EDatabaseError,'Post was called in a non-edit state');
     end;
+end;
+
+procedure TTestDBBasics.TestCancel;
+begin
+  with DBConnector.GetNDataset(1) do
+  begin
+    Open;
+    Edit;
+    FieldByName('name').AsString := 'EditName1';
+    Cancel;
+    CheckEquals('TestName1', FieldByName('name').AsString, 'Cancel did not restored previous value');
+  end;
 end;
 
 procedure TTestDBBasics.TestMove;
@@ -454,17 +468,17 @@ var
 begin
   query1:= DBConnector.GetNDataset(11);
   datalink1:= TDataLink.create;
-  datasource1:= tdatasource.create(nil);
+  datasource1:= TDataSource.create(nil);
   try
-    datalink1.datasource:= datasource1;
-    datasource1.dataset:= query1;
+    datalink1.DataSource:= datasource1;
+    datasource1.DataSet:= query1;
 
-    query1.active := true;
+    query1.active := True;
     query1.active := False;
     CheckEquals(0, THackDataLink(datalink1).RecordCount);
-    query1.active := true;
+    query1.active := True;
     CheckTrue(THackDataLink(datalink1).RecordCount>0);
-    query1.active := false;
+    query1.active := False;
   finally
     datalink1.free;
     datasource1.free;
@@ -488,13 +502,11 @@ begin
     CheckEquals(count,RecordCount);
 
     Close;
-
     end;
 end;
 
 procedure TTestCursorDBBasics.TestRecNo;
-var i       : longint;
-    passed  : boolean;
+var passed  : boolean;
 begin
   with DBConnector.GetNDataset(0) do
     begin
@@ -502,68 +514,86 @@ begin
     // return 0
     passed := false;
     try
-      i := recno;
+      passed := RecNo = 0;
     except on E: Exception do
-      begin
       passed := E.classname = EDatabaseError.className
-      end;
     end;
     if not passed then
       CheckEquals(0,RecNo,'Failed to get the RecNo from a closed dataset');
 
-    // Accessing Recordcount on a closed dataset should raise an EDatabaseError or should
+    // Accessing RecordCount on a closed dataset should raise an EDatabaseError or should
     // return 0
     passed := false;
     try
-      i := recordcount;
+      passed := RecordCount = 0;
     except on E: Exception do
-      begin
       passed := E.classname = EDatabaseError.className
-      end;
     end;
     if not passed then
-      CheckEquals(0,RecNo,'Failed to get the Recordcount from a closed dataset');
+      CheckEquals(0,RecordCount,'Failed to get the RecordCount from a closed dataset');
 
     Open;
 
-    CheckEquals(0,RecordCount);
-    CheckEquals(0,RecNo);
+    CheckEquals(0,RecordCount,'1. record count after open');
+    CheckEquals(0,RecNo,'1. recno after open');
+    CheckEquals(True,EOF and BOF, '1. Empty');
 
     first;
-    CheckEquals(0,RecordCount);
-    CheckEquals(0,RecNo);
+    CheckEquals(0,RecordCount,'2. recordcount after first (empty)');
+    CheckEquals(0,RecNo,'2. recno after first (empty)');
+    CheckEquals(True,EOF and BOF, '1. Empty');
 
     last;
-    CheckEquals(0,RecordCount);
-    CheckEquals(0,RecNo);
+    CheckEquals(0,RecordCount,'3. recordcount after last (empty)');
+    CheckEquals(0,RecNo,'3. recordcount after last (empty)');
+    CheckEquals(True,EOF and BOF, '3. Empty');
 
     append;
-    CheckEquals(0,RecNo);
-    CheckEquals(0,RecordCount);
+    CheckEquals(0,RecNo,'4. recno after append (empty)');
+    CheckEquals(0,RecordCount,'4. recordcount after append (empty)');
+    CheckEquals(False, EOF and BOF, '4. Empty');
 
     first;
-    CheckEquals(0,RecNo);
-    CheckEquals(0,RecordCount);
+    CheckEquals(0,RecNo,'5. recno after first append (empty,append )');
+    CheckEquals(0,RecordCount,'5. recordcount after first (empty, append)');
+    CheckEquals(True,EOF and BOF, '5. Empty');
 
     append;
     FieldByName('id').AsInteger := 1;
-    CheckEquals(0,RecNo);
-    CheckEquals(0,RecordCount);
+    CheckEquals(0,RecNo,'6. recno after second append (empty,append)');
+    CheckEquals(0,RecordCount,'6. recordcount after second append (empty,append)');
+    CheckEquals(False ,EOF and BOF, '6. Empty');
 
     first;
-    CheckEquals(1,RecNo);
-    CheckEquals(1,RecordCount);
+    CheckEquals(1,RecNo,'7. recno after second append, first (1,append)');
+    CheckEquals(1,RecordCount,'7. recordcount after second append,first (1,append)');
+    CheckEquals(False ,EOF and BOF, '7. Empty');
 
     last;
-    CheckEquals(1,RecNo);
-    CheckEquals(1,RecordCount);
+    CheckEquals(1,RecNo,'8. recno after second append, last (1,append)');
+    CheckEquals(1,RecordCount,'8. recordcount after second append, last (1,append)');
 
     append;
-    FieldByName('id').AsInteger := 1;
-    CheckEquals(0,RecNo,'RecNo after 3rd Append');
-    CheckEquals(1,RecordCount);
+    FieldByName('id').AsInteger := 2;
+    CheckEquals(0,RecNo,'9. RecNo after 3rd Append');
+    CheckEquals(1,RecordCount,'9. Recordcount after 3rd Append');
+    post;
+
+    edit;
+    CheckEquals(2,RecNo,'RecNo after Edit');
+    CheckEquals(2,RecordCount);
 
     Close;
+
+    // Tests if RecordCount resets to 0 after dataset is closed
+    passed := false;
+    try
+      passed := RecordCount = 0;
+    except on E: Exception do
+      passed := E.classname = EDatabaseError.className
+    end;
+    if not passed then
+      CheckEquals(0,RecordCount,'RecordCount after Close');
     end;
 end;
 
@@ -669,9 +699,9 @@ end;
 procedure TTestDBBasics.TestDetectionNonMatchingDataset;
 var
   F: TField;
-  ds: tdataset;
+  ds: TDataSet;
 begin
-  // TDataset.Bindfields should detect problems when the underlying data does
+  // TDataset.BindFields should detect problems when the underlying data does
   // not reflect the fields of the dataset. This test is to check if this is
   // really done.
   ds := DBConnector.GetNDataset(true,6);
@@ -699,7 +729,7 @@ begin
     InsertRecord([152,'TestInsRec']);
     CheckEquals(152,fields[0].AsInteger);
     CheckEquals('TestInsRec',fields[1].AsString);
-    CheckTrue(state=dsBrowse);
+    CheckTrue(State=dsBrowse);
 
     // AppendRecord should append a record, further the same as InsertRecord
     AppendRecord([151,'TestInsRec']);
@@ -752,12 +782,12 @@ begin
     CheckEquals(1,FieldByName('id').AsInteger);
 
     next;
-    delete;
+    delete;           // id=2
 
     GotoBookmark(BM2);
     CheckEquals(3,FieldByName('id').AsInteger,'After #2 deleted');
     
-    delete;delete;
+    delete;delete;    // id=3,4
 
     GotoBookmark(BM3);
     CheckEquals(6,FieldByName('id').AsInteger);
@@ -786,7 +816,7 @@ begin
 end;
 
 procedure TTestCursorDBBasics.TestBookmarkValid;
-var BM1,BM2,BM3,BM4,BM5 : TBookmark;
+var BM1,BM2,BM3,BM4,BM5,BM6 : TBookmark;
 begin
   with DBConnector.GetNDataset(true,14) do
     begin
@@ -818,7 +848,37 @@ begin
     CheckTrue(BookmarkValid(BM3));
     CheckTrue(BookmarkValid(BM2));
     CheckTrue(BookmarkValid(BM1));
+    Append;
+    BM6 := GetBookmark;
+    CheckFalse(BookmarkValid(BM6));
     end;
+end;
+
+procedure TTestCursorDBBasics.TestCompareBookmarks;
+var
+  FirstBookmark, LastBookmark, EditBookmark, PostEditBookmark: TBookmark;
+begin
+  with DBConnector.GetNDataset(true,14) do
+  begin
+    Open;
+    FirstBookmark := GetBookmark;
+
+    Edit;
+    EditBookmark := GetBookmark;
+    Post;
+    PostEditBookmark := GetBookmark;
+
+    Last;
+    LastBookmark := GetBookmark;
+
+    CheckEquals(0, CompareBookmarks(FirstBookmark, EditBookmark));
+    CheckEquals(0, CompareBookmarks(EditBookmark, PostEditBookmark));
+    CheckTrue(CompareBookmarks(FirstBookmark, LastBookmark) < 0, 'b1<b2');
+    CheckTrue(CompareBookmarks(LastBookmark, FirstBookmark) > 0, 'b1>b2');
+    CheckEquals(0, CompareBookmarks(nil, nil), '(nil,nil)');
+    CheckEquals(-1, CompareBookmarks(FirstBookmark, nil), '(b1,nil)');
+    CheckEquals(+1, CompareBookmarks(nil, FirstBookmark), '(nil,b2)');
+  end;
 end;
 
 procedure TTestCursorDBBasics.TestLocate;
@@ -2782,7 +2842,7 @@ procedure TTestDBBasics.TestCalculatedField;
 var ds   : TDataset;
     AFld1, AFld2, AFld3 : Tfield;
 begin
-  ds := DBConnector.GetNDataset(5);
+  ds := DBConnector.GetNDataset(True,5);
   with ds do
     begin
     AFld1 := TIntegerField.Create(ds);
@@ -2801,10 +2861,10 @@ begin
     CheckEquals(3,FieldCount);
     ds.OnCalcFields := TestcalculatedField_OnCalcfields;
     open;
-    CheckEquals(1,FieldByName('ID').asinteger);
-    CheckEquals(5,FieldByName('CALCFLD').asinteger);
+    CheckEquals(1, FieldByName('ID').AsInteger);
+    CheckEquals(5, FieldByName('CALCFLD').AsInteger);
     next;
-    CheckEquals(70000,FieldByName('CALCFLD').asinteger);
+    CheckEquals(70000,FieldByName('CALCFLD').AsInteger);
     next;
     CheckTrue(FieldByName('CALCFLD').IsNull, '#3 Null');
     next;

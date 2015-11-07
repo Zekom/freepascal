@@ -444,6 +444,7 @@ implementation
          p:tnode;
          gendef : tstoreddef;
          s : shortstring;
+         i : longint;
 {$ifdef x86}
          segment_register: string;
 {$endif x86}
@@ -481,6 +482,13 @@ implementation
                consume(_LSHARPBRACKET);
                generictypelist:=parse_generic_parameters(true);
                consume(_RSHARPBRACKET);
+
+               { we are not freeing the type parameters, so register them }
+               for i:=0 to generictypelist.count-1 do
+                 begin
+                    ttypesym(generictypelist[i]).register_sym;
+                    tstoreddef(ttypesym(generictypelist[i]).typedef).register_def;
+                 end;
 
                str(generictypelist.Count,s);
                gentypename:=typename+'$'+s;
@@ -592,7 +600,7 @@ implementation
                   sym:=tsym(symtablestack.top.Find(typename));
                   if not assigned(sym) then
                     begin
-                      sym:=ctypesym.create(orgtypename,cundefineddef.create);
+                      sym:=ctypesym.create(orgtypename,cundefineddef.create(true),true);
                       Include(sym.symoptions,sp_generic_dummy);
                       ttypesym(sym).typedef.typesym:=sym;
                       sym.visibility:=symtablestack.top.currentvisibility;
@@ -628,7 +636,7 @@ implementation
               { insert a new type if we don't reuse an existing symbol }
               if not assigned(newtype) then
                 begin
-                  newtype:=ctypesym.create(genorgtypename,hdef);
+                  newtype:=ctypesym.create(genorgtypename,hdef,true);
                   newtype.visibility:=symtablestack.top.currentvisibility;
                   symtablestack.top.insert(newtype);
                 end;
@@ -706,10 +714,21 @@ implementation
                 ttypesym(sym).typedef:=hdef;
               newtype.typedef:=hdef;
               { KAZ: handle TGUID declaration in system unit }
-              if (cs_compilesystem in current_settings.moduleswitches) and not assigned(rec_tguid) and
-                 (gentypename='TGUID') and { name: TGUID and size=16 bytes that is 128 bits }
-                 assigned(hdef) and (hdef.typ=recorddef) and (hdef.size=16) then
-                rec_tguid:=trecorddef(hdef);
+              if (cs_compilesystem in current_settings.moduleswitches) and
+                 assigned(hdef) and
+                 (hdef.typ=recorddef) then
+                begin
+                  if not assigned(rec_tguid) and
+                     (gentypename='TGUID') and
+                     (hdef.size=16) then
+                    rec_tguid:=trecorddef(hdef)
+                  else if not assigned(rec_jmp_buf) and
+                     (gentypename='JMP_BUF') then
+                    rec_jmp_buf:=trecorddef(hdef)
+                  else if not assigned(rec_exceptaddr) and
+                     (gentypename='TEXCEPTADDR') then
+                    rec_exceptaddr:=trecorddef(hdef);
+                end;
             end;
            if assigned(hdef) then
             begin
@@ -787,6 +806,29 @@ implementation
                            consume(_SEMICOLON);
                          end;
                        parse_var_proc_directives(tsym(newtype));
+                       if po_is_function_ref in tprocvardef(hdef).procoptions then
+                         begin
+                           { these always support everything, no "of object" or
+                             "is_nested" is allowed }
+                           if is_nested_pd(tprocvardef(hdef)) or
+                              is_methodpointer(hdef) then
+                             cgmessage(type_e_function_reference_kind)
+                           else
+                             begin
+                               if (po_hascallingconvention in tprocvardef(hdef).procoptions) and
+                                  (tprocvardef(hdef).proccalloption=pocall_cdecl) then
+                                 begin
+                                   include(tprocvardef(hdef).procoptions,po_is_block);
+                                   { can't check yet whether the parameter types
+                                     are valid for a block, since some of them
+                                     may still be forwarddefs }
+                                 end
+                               else
+                                 { a regular anonymous function type: not yet supported }
+                                 { the }
+                                 Comment(V_Error,'Function references are not yet supported, only C blocks (add "cdecl;" at the end)');
+                             end
+                         end;
                        handle_calling_convention(tprocvardef(hdef));
                        if try_consume_hintdirective(newtype.symoptions,newtype.deprecatedmsg) then
                          consume(_SEMICOLON);
@@ -915,7 +957,7 @@ implementation
           read_var_decls([vd_threadvar])
         else
           begin
-            Message(parser_f_unsupported_feature);
+            Message1(parser_f_unsupported_feature,featurestr[f_threading]);
             read_var_decls([]);
           end;
       end;

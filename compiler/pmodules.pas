@@ -46,7 +46,7 @@ implementation
        pexports,
        objcgutl,
        wpobase,
-       scanner,pbase,pexpr,psystem,psub,pdecsub,ncgvmt,
+       scanner,pbase,pexpr,psystem,psub,pdecsub,ncgvmt,ncgrtti,
        cpuinfo;
 
 
@@ -91,6 +91,10 @@ implementation
             end;
            KeepShared.Free;
          end;
+
+        { allow a target-specific pass over all assembler code (used by LLVM
+          to insert type definitions }
+        cnodeutils.InsertObjectInfo;
 
         { Start and end module debuginfo, at least required for stabs
           to insert n_sourcefile lines }
@@ -141,7 +145,7 @@ implementation
         if not(target_info.system in systems_darwin) and
            (
             (tf_needs_dwarf_cfi in target_info.flags) or
-            (paratargetdbg in [dbg_dwarf2, dbg_dwarf3])
+            (target_dbg.id in [dbg_dwarf2, dbg_dwarf3])
            ) then
           begin
             current_asmdata.asmlists[al_dwarf_frame].Free;
@@ -309,7 +313,7 @@ implementation
              AddUnit('heaptrc');
            { Lineinfo unit }
            if (cs_use_lineinfo in current_settings.globalswitches) then begin
-             case paratargetdbg of
+             case target_dbg.id of
                dbg_stabs:
                  AddUnit('lineinfo');
                dbg_stabx:
@@ -348,6 +352,10 @@ implementation
         if m_iso in current_settings.modeswitches then
           AddUnit('iso7185');
 
+        { blocks support? }
+        if m_blocks in current_settings.modeswitches then
+          AddUnit('blockrtl');
+
         { default char=widechar? }
         if m_default_unicodestring in current_settings.modeswitches then
           AddUnit('uuchar');
@@ -374,11 +382,10 @@ implementation
           end;
 
         { CPU targets with microcontroller support can add a controller specific unit }
-{$if defined(ARM) or defined(AVR) or defined(MIPSEL)}
-        if (target_info.system in systems_embedded) and (current_settings.controllertype<>ct_none) and
+        if ControllerSupport and (target_info.system in systems_embedded) and
+          (current_settings.controllertype<>ct_none) and
           (embedded_controllers[current_settings.controllertype].controllerunitstr<>'') then
           AddUnit(embedded_controllers[current_settings.controllertype].controllerunitstr);
-{$endif ARM AVR MIPSEL}
       end;
 
 
@@ -427,7 +434,7 @@ implementation
            if s='LINEINFO' then
              begin
                Message(parser_w_no_lineinfo_use_switch);
-               if (paratargetdbg in [dbg_dwarf2, dbg_dwarf3]) then
+               if (target_dbg.id in [dbg_dwarf2, dbg_dwarf3]) then
                 s := 'LNFODWRF';
               sorg := s;
              end;
@@ -537,7 +544,33 @@ implementation
                     pd.localst.free;
                     pd.localst:=nil;
                   end;
+                pd.freeimplprocdefinfo;
               end;
+          end;
+      end;
+
+
+    procedure free_unregistered_localsymtable_elements;
+      var
+        i: longint;
+        def: tdef;
+        sym: tsym;
+      begin
+        { from high to low so we hopefully have moves of less data }
+        for i:=current_module.localsymtable.symlist.count-1 downto 0 do
+          begin
+            sym:=tsym(current_module.localsymtable.symlist[i]);
+            { this also frees sym, as the symbols are owned by the symtable }
+            if not sym.is_registered then
+              current_module.localsymtable.Delete(sym);
+          end;
+        for i:=current_module.localsymtable.deflist.count-1 downto 0 do
+          begin
+            def:=tdef(current_module.localsymtable.deflist[i]);
+            { this also frees def, as the defs are owned by the symtable }
+            if not def.is_registered and
+               not(df_not_registered_no_free in def.defoptions) then
+              current_module.localsymtable.deletedef(def);
           end;
       end;
 
@@ -568,8 +601,13 @@ implementation
         pd:=tprocdef(cnodeutils.create_main_procdef(target_info.cprefix+name,potype,ps));
         { We don't need is a local symtable. Change it into the static
           symtable }
-        pd.localst.free;
-        pd.localst:=st;
+        if potype<>potype_mainstub then
+          begin
+            pd.localst.free;
+            pd.localst:=st;
+          end
+        else
+          pd.proccalloption:=pocall_cdecl;
         handle_calling_convention(pd);
         { set procinfo and current_procinfo.procdef }
         result:=tcgprocinfo(cprocinfo.create(nil));
@@ -712,11 +750,11 @@ implementation
           { java_jlobject may not have been parsed yet (system unit); in any
             case, we only use this to refer to the class type, so inheritance
             does not matter }
-          def:=cobjectdef.create(odt_javaclass,'__FPC_JVM_Module_Class_Alias$',nil);
+          def:=cobjectdef.create(odt_javaclass,'__FPC_JVM_Module_Class_Alias$',nil,true);
           include(def.objectoptions,oo_is_external);
           include(def.objectoptions,oo_is_sealed);
           def.objextname:=stringdup(current_module.realmodulename^);
-          typesym:=ctypesym.create('__FPC_JVM_Module_Class_Alias$',def);
+          typesym:=ctypesym.create('__FPC_JVM_Module_Class_Alias$',def,true);
           symtablestack.top.insert(typesym);
         end;
 {$endif jvm}
@@ -846,7 +884,11 @@ type
              loadunits(nil);
              { has it been compiled at a higher level ?}
              if current_module.state=ms_compiled then
-               exit;
+               begin
+                 Message1(parser_u_already_compiled,current_module.realmodulename^);
+                 exit;
+               end;
+
              consume_semicolon_after_uses:=true;
            end
          else
@@ -944,6 +986,8 @@ type
          { All units are read, now give them a number }
          current_module.updatemaps;
 
+         { further, changing the globalsymtable is not allowed anymore }
+         current_module.globalsymtable.sealed:=true;
          symtablestack.push(current_module.localsymtable);
 
          if not current_module.interface_only then
@@ -1056,6 +1100,13 @@ type
 
          { Generate specializations of objectdefs methods }
          generate_specialization_procs;
+
+         { Generate VMTs }
+         if Errorcount=0 then
+           begin
+             write_vmts(current_module.globalsymtable,true);
+             write_vmts(current_module.localsymtable,false);
+           end;
 
          { add implementations for synthetic method declarations added by
            the compiler }
@@ -1226,10 +1277,12 @@ type
            end;
 {$ifdef EXTDEBUG}
          if not(cs_compilesystem in current_settings.moduleswitches) then
-           if (store_crc<>current_module.crc) and simplify_ppu then
+           if (store_crc<>current_module.crc) then
              Message1(unit_u_implementation_crc_changed,current_module.ppufilename);
 {$endif EXTDEBUG}
 
+         { release unregistered defs/syms from the localsymtable }
+         free_unregistered_localsymtable_elements;
          { release local symtables that are not needed anymore }
          free_localsymtables(current_module.globalsymtable);
          free_localsymtables(current_module.localsymtable);
@@ -1908,7 +1961,7 @@ type
          resources_used : boolean;
          program_name : ansistring;
          consume_semicolon_after_uses : boolean;
-         ps : tstaticvarsym;
+         ps : tprogramparasym;
          paramnum : longint;
          textsym : ttypesym;
          sc : array of TProgramParam;
@@ -1975,7 +2028,11 @@ type
               exportlib.preparelib(program_name);
 
               if tf_library_needs_pic in target_info.flags then
-                include(current_settings.moduleswitches,cs_create_pic);
+                begin
+                  include(current_settings.moduleswitches,cs_create_pic);
+                  { also set create_pic for all unit compilation }
+                  include(init_settings.moduleswitches,cs_create_pic);
+                end;
 
               { setup things using the switches, do this before the semicolon, because after the semicolon has been
                 read, all following directives are parsed as well }
@@ -2063,10 +2120,8 @@ type
                internalerror(2013011201);
              for i:=0 to high(sc) do
                begin
-                 ps:=cstaticvarsym.create(sc[i].name,vs_value,textsym.typedef,[]);
-                 ps.isoindex:=sc[i].nr;
+                 ps:=cprogramparasym.create(sc[i].name,sc[i].nr);
                  current_module.localsymtable.insert(ps,true);
-                 cnodeutils.insertbssdata(tstaticvarsym(ps));
                end;
            end;
 
@@ -2119,6 +2174,17 @@ type
           end
          else if (target_info.system in ([system_i386_netware,system_i386_netwlibc,system_powerpc_macos]+systems_darwin+systems_aix)) then
            begin
+             { create a stub with the name of the desired main routine, with
+               the same signature as the C "main" function, and call through to
+               FPC_SYSTEMMAIN, which will initialise everything based on its
+               parameters. This function cannot be in the system unit, because
+               its name can be configured on the command line (for use with e.g.
+               SDL, where the main function should be called SDL_main) }
+             main_procinfo:=create_main_proc(mainaliasname,potype_mainstub,current_module.localsymtable);
+             call_through_new_name(main_procinfo.procdef,target_info.cprefix+'FPC_SYSTEMMAIN');
+             main_procinfo.free;
+             { now create the PASCALMAIN routine (which will be called from
+               FPC_SYSTEMMAIN) }
              main_procinfo:=create_main_proc('PASCALMAIN',potype_proginit,current_module.localsymtable);
            end
          else
@@ -2132,6 +2198,10 @@ type
 
          { Generate specializations of objectdefs methods }
          generate_specialization_procs;
+
+         { Generate VMTs }
+         if Errorcount=0 then
+           write_vmts(current_module.localsymtable,false);
 
          { add implementations for synthetic method declarations added by
            the compiler }

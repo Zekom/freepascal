@@ -99,7 +99,11 @@ uses
   procedure GetModuleByAddr(addr: pointer; var baseaddr: pointer; var filename: string);
     begin
       baseaddr:= nil;
+{$ifdef FPC_HAS_FEATURE_COMMANDARGS}
       filename:=ParamStr(0);
+{$else FPC_HAS_FEATURE_COMMANDARGS}
+      filename:='';
+{$endif FPC_HAS_FEATURE_COMMANDARGS}
     end;
 
 {$endif windows}
@@ -109,7 +113,7 @@ uses
                              Executable Loaders
 ****************************************************************************}
 
-{$if defined(freebsd) or defined(netbsd) or defined (openbsd) or defined(linux) or defined(sunos) or defined(android)}
+{$if defined(freebsd) or defined(netbsd) or defined (openbsd) or defined(linux) or defined(sunos) or defined(android) or defined(dragonfly)}
   {$ifdef cpu64}
     {$define ELF64}
   {$else}
@@ -180,7 +184,7 @@ function getByte(var f:file):byte;
   begin
     for i := 1 to bytes do getbyte(f);
   end;
-  
+
   function get0String (var f:file) : string;
   var c : char;
   begin
@@ -192,7 +196,7 @@ function getByte(var f:file):byte;
       c := char (getbyte(f));
     end;
   end;
-  
+
   function getint32 (var f:file): longint;
   begin
     blockread (F, getint32, 4);
@@ -209,7 +213,7 @@ var valid : boolean;
     hdrLength,
     dataOffset,
     dataLength : longint;
-  
+
 
   function getLString : String;
   var Res:string;
@@ -235,12 +239,12 @@ var valid : boolean;
     blockread (e.F, getword, 2);
   end;
 
-  
+
 
 begin
   e.sechdrofs := 0;
   openNetwareNLM:=false;
-  
+
   // read and check header
   Skip (e.f,SIZE_OF_NLM_INTERNAL_FIXED_HEADER);
   getLString;  // NLM Description
@@ -728,6 +732,16 @@ type
       sh_addralign      : longword;
       sh_entsize        : longword;
     end;
+  telfproghdr=packed record
+    p_type            : longword;
+    p_offset          : longword;
+    p_vaddr           : longword;
+    p_paddr           : longword;
+    p_filesz          : longword;
+    p_memsz           : longword;
+    p_flags           : longword;
+    p_align           : longword;
+  end;
 {$endif ELF32 or BEOS}
 {$ifdef ELF64}
 type
@@ -764,6 +778,17 @@ type
       sh_addralign      : int64;
       sh_entsize        : int64;
     end;
+
+  telfproghdr=packed record
+    p_type            : longword;
+    p_flags           : longword;
+    p_offset          : qword;
+    p_vaddr           : qword;
+    p_paddr           : qword;
+    p_filesz          : qword;
+    p_memsz           : qword;
+    p_align           : qword;
+  end;
 {$endif ELF64}
 
 
@@ -772,6 +797,8 @@ function OpenElf(var e:TExeFile):boolean;
 var
   elfheader : telfheader;
   elfsec    : telfsechdr;
+  phdr      : telfproghdr;
+  i         : longint;
 begin
   OpenElf:=false;
   { read and check header }
@@ -788,6 +815,20 @@ begin
   e.secstrofs:=elfsec.sh_offset;
   e.sechdrofs:=elfheader.e_shoff;
   e.nsects:=elfheader.e_shnum;
+
+  { scan program headers to find the image base address }
+  e.processaddress:=High(e.processaddress);
+  seek(e.f,elfheader.e_phoff);
+  for i:=1 to elfheader.e_phnum do
+    begin
+      blockread(e.f,phdr,sizeof(phdr));
+      if (phdr.p_type = 1 {PT_LOAD}) and (ptruint(phdr.p_vaddr) < e.processaddress) then
+        e.processaddress:=phdr.p_vaddr;
+    end;
+
+  if e.processaddress = High(e.processaddress) then
+    e.processaddress:=0;
+
   OpenElf:=true;
 end;
 
@@ -840,7 +881,7 @@ const
    B_ADD_ON_IMAGE  = 3;
    B_SYSTEM_IMAGE  = 4;
    B_OK = 0;
-   
+
 type
     image_info = packed record
      id      : image_id;

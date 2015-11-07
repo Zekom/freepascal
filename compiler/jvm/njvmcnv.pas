@@ -368,7 +368,7 @@ implementation
                       genintconstnode(tsetdef(left.resultdef).setbase),
                         ccallparanode.create(left,nil))));
               end;
-            inserttypeconv_explicit(result,getpointerdef(resultdef));
+            inserttypeconv_explicit(result,cpointerdef.getreusable(resultdef));
             result:=cderefnode.create(result);
             { reused }
             left:=nil;
@@ -387,7 +387,7 @@ implementation
         result:=ccallnode.createinternmethod(
           cloadvmtaddrnode.create(ctypenode.create(tcpuprocvardef(resultdef).classdef)),'CREATE',nil);
         { method pointer is an implicit pointer type }
-        result:=ctypeconvnode.create_explicit(result,getpointerdef(resultdef));
+        result:=ctypeconvnode.create_explicit(result,cpointerdef.getreusable(resultdef));
         result:=cderefnode.create(result);
       end;
 
@@ -494,7 +494,7 @@ implementation
           result:=ctypeconvnode.create_explicit(result,resultdef)
         else
           begin
-            result:=ctypeconvnode.create_explicit(result,getpointerdef(resultdef));
+            result:=ctypeconvnode.create_explicit(result,cpointerdef.getreusable(resultdef));
             result:=cderefnode.create(result)
           end;
         { reused }
@@ -524,7 +524,7 @@ implementation
           with a single #0 }
         result:=ccallnode.create(ccallparanode.create(left,nil),tprocsym(ps),
           ps.owner,
-          cloadvmtaddrnode.create(ctypenode.create(java_ansistring)),[]);
+          cloadvmtaddrnode.create(ctypenode.create(java_ansistring)),[],nil);
         include(result.flags,nf_isproperty);
         result:=ctypeconvnode.create_explicit(result,resultdef);
         { reused }
@@ -704,12 +704,7 @@ implementation
     procedure tjvmtypeconvnode.second_bool_to_int;
       var
          newsize: tcgsize;
-         oldTrueLabel,oldFalseLabel : tasmlabel;
       begin
-         oldTrueLabel:=current_procinfo.CurrTrueLabel;
-         oldFalseLabel:=current_procinfo.CurrFalseLabel;
-         current_asmdata.getjumplabel(current_procinfo.CurrTrueLabel);
-         current_asmdata.getjumplabel(current_procinfo.CurrFalseLabel);
          secondpass(left);
          location_copy(location,left.location);
          newsize:=def_cgsize(resultdef);
@@ -737,20 +732,14 @@ implementation
          else
            { may differ in sign, e.g. bytebool -> byte   }
            location.size:=newsize;
-         current_procinfo.CurrTrueLabel:=oldTrueLabel;
-         current_procinfo.CurrFalseLabel:=oldFalseLabel;
       end;
 
 
     procedure tjvmtypeconvnode.second_int_to_bool;
       var
-        hlabel1,hlabel2,oldTrueLabel,oldFalseLabel : tasmlabel;
+        hlabel1,hlabel2: tasmlabel;
         newsize  : tcgsize;
       begin
-        oldTrueLabel:=current_procinfo.CurrTrueLabel;
-        oldFalseLabel:=current_procinfo.CurrFalseLabel;
-        current_asmdata.getjumplabel(current_procinfo.CurrTrueLabel);
-        current_asmdata.getjumplabel(current_procinfo.CurrFalseLabel);
         secondpass(left);
         if codegenerror then
           exit;
@@ -770,8 +759,6 @@ implementation
                hlcg.location_force_reg(current_asmdata.CurrAsmList,location,left.resultdef,resultdef,true)
              else
                location.size:=newsize;
-             current_procinfo.CurrTrueLabel:=oldTrueLabel;
-             current_procinfo.CurrFalseLabel:=oldFalseLabel;
              exit;
           end;
 
@@ -786,8 +773,8 @@ implementation
            end;
          LOC_JUMP :
            begin
-             hlabel1:=current_procinfo.CurrFalseLabel;
-             hlcg.a_label(current_asmdata.CurrAsmList,current_procinfo.CurrTrueLabel);
+             hlabel1:=left.location.falselabel;
+             hlcg.a_label(current_asmdata.CurrAsmList,left.location.truelabel);
            end;
          else
            internalerror(10062);
@@ -805,9 +792,6 @@ implementation
        thlcgjvm(hlcg).a_load_const_stack(current_asmdata.CurrAsmList,resultdef,0,R_INTREGISTER);
        hlcg.a_label(current_asmdata.CurrAsmList,hlabel2);
        thlcgjvm(hlcg).a_load_stack_reg(current_asmdata.CurrAsmList,resultdef,location.register);
-
-       current_procinfo.CurrTrueLabel:=oldTrueLabel;
-       current_procinfo.CurrFalseLabel:=oldFalseLabel;
      end;
 
 
@@ -879,7 +863,7 @@ implementation
           { call the (static class) method to get the raw bits }
           result:=ccallnode.create(ccallparanode.create(left,nil),
             tprocsym(psym),psym.owner,
-            cloadvmtaddrnode.create(ctypenode.create(csym.typedef)),[]);
+            cloadvmtaddrnode.create(ctypenode.create(csym.typedef)),[],nil);
           { convert the result to the result type of this type conversion node }
           inserttypeconv_explicit(result,resultdef);
           { left is reused }
@@ -898,7 +882,7 @@ implementation
             internalerror(2011062601);
           result:=ccallnode.create(ccallparanode.create(left,nil),
             tprocsym(psym),psym.owner,
-            cloadvmtaddrnode.create(ctypenode.create(todef.classdef)),[]);
+            cloadvmtaddrnode.create(ctypenode.create(todef.classdef)),[],nil);
           { convert the result to the result type of this type conversion node }
           inserttypeconv_explicit(result,resultdef);
           { left is reused }
@@ -915,7 +899,7 @@ implementation
           if not assigned(psym) or
              (psym.typ<>procsym) then
             internalerror(2011062602);
-          result:=ccallnode.create(nil,tprocsym(psym),psym.owner,left,[]);
+          result:=ccallnode.create(nil,tprocsym(psym),psym.owner,left,[],nil);
           { convert the result to the result type of this type conversion node }
           inserttypeconv_explicit(result,resultdef);
           { left is reused }
@@ -1137,6 +1121,24 @@ implementation
           result:=false;
         end;
 
+
+      function compatible_file_conversion(def1, def2: tdef): boolean;
+        begin
+          if def1.typ=filedef then
+            case tfiledef(def1).filetyp of
+              ft_text:
+                result:=def2=search_system_type('TEXTREC').typedef;
+              ft_typed,
+              ft_untyped:
+                result:=def2=search_system_type('FILEREC').typedef;
+              else
+                internalerror(2015091401);
+            end
+          else
+            result:=false;
+        end;
+
+
       var
         fromclasscompatible,
         toclasscompatible: boolean;
@@ -1263,7 +1265,7 @@ implementation
                   a proper checkcast is inserted }
                 if not check_only then
                   begin
-                    resnode:=ctypeconvnode.create_explicit(left,getpointerdef(resultdef));
+                    resnode:=ctypeconvnode.create_explicit(left,cpointerdef.getreusable(resultdef));
                     resnode:=cderefnode.create(resnode);
                     left:=nil;
                   end;
@@ -1385,7 +1387,7 @@ implementation
                   begin
                     resnode:=to_set_explicit_typecast;
                     { convert to desired result }
-                    inserttypeconv_explicit(resnode,getpointerdef(resultdef));
+                    inserttypeconv_explicit(resnode,cpointerdef.getreusable(resultdef));
                     resnode:=cderefnode.create(resnode);
                   end;
                 result:=true;
@@ -1395,6 +1397,15 @@ implementation
               could also be added (cannot be handled by the above, because
               float(intvalue) will convert rather than re-interpret the value) }
           end;
+
+        { files }
+        if compatible_file_conversion(left.resultdef,resultdef) or
+           compatible_file_conversion(resultdef,left.resultdef) then
+          begin
+            result:=true;
+            exit;
+          end;
+
 
         { anything not explicitly handled is a problem }
         result:=true;
@@ -1495,7 +1506,7 @@ implementation
               if not assigned(ps) or
                  (ps.typ<>procsym) then
                 internalerror(2011041910);
-              call:=ccallnode.create(ccallparanode.create(node.left,nil),tprocsym(ps),ps.owner,ctypeconvnode.create_explicit(node.right,jlclass),[]);
+              call:=ccallnode.create(ccallparanode.create(node.left,nil),tprocsym(ps),ps.owner,ctypeconvnode.create_explicit(node.right,jlclass),[],nil);
               node.left:=nil;
               node.right:=nil;
               firstpass(call);

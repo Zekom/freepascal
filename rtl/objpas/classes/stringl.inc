@@ -42,13 +42,13 @@ end;
 
 { //!! is used to mark unsupported things. }
 
-Function QuoteString (Const S : String; Quote : String) : String;
+Function QuoteString (Const S : String; Const Quote : String) : String;
 Var
   I,J : Integer;
 begin
   J:=0;
   Result:=S;
-  for i:=1to length(s) do
+  for i:=1 to length(s) do
    begin
      inc(j);
      if S[i]=Quote then
@@ -74,8 +74,9 @@ begin
     FQuoteChar:='"';
     FDelimiter:=',';
     FNameValueSeparator:='=';
-    FSpecialCharsInited:=true;
     FLBS:=DefaultTextLineBreakStyle;
+    FSpecialCharsInited:=true;
+    FLineBreak:=sLineBreak;
     end;
 end;
 
@@ -97,6 +98,24 @@ begin
   FDelimiter:=c;
 end;
 
+Function TStrings.GetDelimiter : Char;
+begin
+  CheckSpecialChars;
+  Result:=FDelimiter;
+end;
+
+procedure TStrings.SetLineBreak(Const S : String);
+begin
+  CheckSpecialChars;
+  FLineBreak:=S;
+end;
+
+Function TStrings.GetLineBreak : String;
+begin
+  CheckSpecialChars;
+  Result:=FLineBreak;
+end;
+
 
 procedure TStrings.SetQuoteChar(c:Char);
 begin
@@ -104,10 +123,22 @@ begin
   FQuoteChar:=c;
 end;
 
+Function TStrings.GetQuoteChar :Char;
+begin
+  CheckSpecialChars;
+  Result:=FQuoteChar;
+end;
+
 procedure TStrings.SetNameValueSeparator(c:Char);
 begin
   CheckSpecialChars;
   FNameValueSeparator:=c;
+end;
+
+Function TStrings.GetNameValueSeparator :Char;
+begin
+  CheckSpecialChars;
+  Result:=FNameValueSeparator;
 end;
 
 
@@ -469,11 +500,14 @@ Var P : Pchar;
 begin
   CheckSpecialChars;
   // Determine needed place
-  Case FLBS of
-    tlbsLF   : NL:=#10;
-    tlbsCRLF : NL:=#13#10;
-    tlbsCR   : NL:=#13; 
-  end;
+  if FLineBreak<>sLineBreak then
+    NL:=FLineBreak
+  else
+    Case FLBS of
+      tlbsLF   : NL:=#10;
+      tlbsCRLF : NL:=#13#10;
+      tlbsCR   : NL:=#13;
+    end;
   L:=0;
   NLS:=Length(NL);
   For I:=0 to count-1 do
@@ -523,7 +557,7 @@ begin
   // Empty.
 end;
 
-Function GetNextLine (Const Value : String; Var S : String; Var P : Integer) : Boolean;
+Class Function TStrings.GetNextLine (Const Value : String; Var S : String; Var P : Integer) : Boolean;
 
 Var 
   PS : PChar;
@@ -557,6 +591,27 @@ begin
   Result:=True;
 end;
 
+Function TStrings.GetNextLineBreak (Const Value : String; Var S : String; Var P : Integer) : Boolean;
+
+Var
+  PS,PC,PP : PChar;
+
+begin
+  S:='';
+  Result:=False;
+  If ((Length(Value)-P)<=0) then
+    exit;
+  PS:=@Value[P];
+  PC:=PS;
+  PP:=AnsiStrPos(PS,PChar(FLineBreak));
+  // Stop on #0.
+  While (PC^<>#0) and (PC<>PP) do
+    Inc(PC);
+  P:=P+(PC-PS)+Length(FLineBreak);
+  SetString(S,PS,PC-PS);
+  Result:=True;
+end;
+
 Procedure TStrings.DoSetTextStr(const Value: string; DoClear : Boolean);
 
 Var
@@ -569,8 +624,14 @@ begin
     if DoClear then
       Clear;
     P:=1;
-    While GetNextLine (Value,S,P) do
-      Add(S);
+    if FLineBreak=sLineBreak then
+      begin
+      While GetNextLine (Value,S,P) do
+        Add(S)
+      end
+    else
+      While GetNextLineBreak (Value,S,P) do
+        Add(S);
   finally
     EndUpdate;
   end;
@@ -579,12 +640,14 @@ end;
 Procedure TStrings.SetTextStr(const Value: string);
 
 begin
+  CheckSpecialChars;
   DoSetTextStr(Value,True);
 end;
 
 Procedure TStrings.AddText(const S: string);
 
 begin
+  CheckSpecialChars;
   DoSetTextStr(S,False);
 end;
 
@@ -611,6 +674,11 @@ begin
   Insert (Count,S);
 end;
 
+function TStrings.Add(const Fmt : string; const Args : Array of const): Integer;
+
+begin
+  Result:=Add(Format(Fmt,Args));
+end;
 
 
 Function TStrings.AddObject(const S: string; AObject: TObject): Integer;
@@ -620,6 +688,11 @@ begin
   Objects[result]:=AObject;
 end;
 
+function TStrings.AddObject(const Fmt: string; Args : Array of const; AObject: TObject): Integer;
+
+begin
+  Result:=AddObject(Format(Fmt,Args),AObject);
+end;
 
 
 Procedure TStrings.Append(const S: string);
@@ -677,6 +750,7 @@ begin
       FDelimiter:=S.FDelimiter;
       FNameValueSeparator:=S.FNameValueSeparator;
       FLBS:=S.FLBS;
+      FLineBreak:=S.FLineBreak;
       AddStrings(S);
     finally
       EndUpdate;
@@ -1163,7 +1237,7 @@ end;
 Procedure TStringList.SetCapacity(NewCapacity: Integer);
 
 Var NewList : Pointer;
-    I,MSize : Longint;
+    MSize : Longint;
 
 begin
   If (NewCapacity<0) then
@@ -1316,6 +1390,8 @@ var
   CompareRes: PtrInt;
 begin
   Result := false;
+  if Not Sorted then 
+    exit;
   // Use binary search.
   L := 0;
   R := Count - 1;

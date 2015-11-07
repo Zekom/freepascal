@@ -26,9 +26,9 @@ type
     ServerVersionString : string;  //Complete version string, including name, platform
   end;
 
-  EIBDatabaseError = class(EDatabaseError)
+  EIBDatabaseError = class(ESQLDatabaseError)
     public
-      GDSErrorCode : Longint;
+      property GDSErrorCode: integer read ErrorCode; deprecated 'Please use ErrorCode instead of GDSErrorCode'; // Nov 2014
   end;
 
   { TIBCursor }
@@ -103,13 +103,14 @@ type
     function GetTransactionHandle(trans : TSQLHandle): pointer; override;
     function Commit(trans : TSQLHandle) : boolean; override;
     function RollBack(trans : TSQLHandle) : boolean; override;
-    function StartdbTransaction(trans : TSQLHandle; AParams : string) : boolean; override;
+    function StartDBTransaction(trans : TSQLHandle; AParams : string) : boolean; override;
     procedure CommitRetaining(trans : TSQLHandle); override;
     procedure RollBackRetaining(trans : TSQLHandle); override;
     procedure UpdateIndexDefs(IndexDefs : TIndexDefs;TableName : string); override;
-    function GetSchemaInfoSQL(SchemaType : TSchemaType; SchemaObjectName, SchemaPattern : string) : string; override;
     procedure LoadBlobIntoBuffer(FieldDef: TFieldDef;ABlobBuf: PBufBlobField; cursor: TSQLCursor; ATransaction : TSQLTransaction); override;
     function RowsAffected(cursor: TSQLCursor): TRowsCount; override;
+    function GetSchemaInfoSQL(SchemaType : TSchemaType; SchemaObjectName, SchemaPattern : string) : string; override;
+    function GetNextValueSQL(const SequenceName: string; IncrementBy: Integer): string; override;
   public
     constructor Create(AOwner : TComponent); override;
     function GetConnectionInfo(InfoType:TConnInfoType): string; override;
@@ -152,21 +153,25 @@ const
 
 procedure TIBConnection.CheckError(ProcName : string; Status : PISC_STATUS);
 var
-  buf : array [0..1023] of char;
-  Msg : string;
-  E   : EIBDatabaseError;
-  Err : longint;
-  
+  ErrorCode : longint;
+  Msg, SQLState : string;
+  Buf : array [0..1023] of char;
+
 begin
   if ((Status[0] = 1) and (Status[1] <> 0)) then
   begin
-    Err := Status[1];
-    msg := '';
+    ErrorCode := Status[1];
+{$IFDEF LinkDynamically}
+    if assigned(fb_sqlstate) then // >= Firebird 2.5
+    begin
+      fb_sqlstate(Buf, Status);
+      SQLState := StrPas(Buf);
+    end;
+{$ENDIF}
+    Msg := '';
     while isc_interprete(Buf, @Status) > 0 do
-      Msg := Msg + LineEnding +' -' + StrPas(Buf);
-    E := EIBDatabaseError.CreateFmt('%s : %s : %s',[self.Name,ProcName,Msg]);
-    E.GDSErrorCode := Err;
-    Raise E;
+      Msg := Msg + LineEnding + ' -' + StrPas(Buf);
+    raise EIBDatabaseError.CreateFmt('%s : %s', [ProcName,Msg], Self, ErrorCode, SQLState);
   end;
 end;
 
@@ -175,7 +180,7 @@ constructor TIBConnection.Create(AOwner : TComponent);
 
 begin
   inherited;
-  FConnOptions := FConnOptions + [sqSupportParams] + [sqEscapeRepeat];
+  FConnOptions := FConnOptions + [sqSupportParams, sqEscapeRepeat, sqSupportReturning];
   FBlobSegmentSize := 65535; //Shows we're using the maximum segment size
   FDialect := INVALID_DATA;
   ResetDatabaseInfo;
@@ -204,7 +209,8 @@ begin
   else result := true;
 end;
 
-function TIBConnection.StartDBTransaction(trans : TSQLHandle;AParams : String) : boolean;
+function TIBConnection.StartDBTransaction(trans: TSQLHandle; AParams: string
+  ): boolean;
 var
   DBHandle : pointer;
   tr       : TIBTrans;
@@ -354,6 +360,13 @@ begin
     CheckError('Close', FStatus);
 {$IfDef LinkDynamically}
   ReleaseIBase60;
+{$ELSE}
+  // Shutdown embedded subsystem with timeout 300ms (Firebird 2.5+)
+  // Required before unloading library; has no effect on non-embedded client
+  if (pointer(fb_shutdown)<>nil) and (fb_shutdown(300,1)<>0) then
+  begin
+    //todo: log error; still try to unload library below as the timeout may have been insufficient
+  end;
 {$EndIf}
 end;
 
@@ -595,7 +608,7 @@ begin
         TrLen := SQLLen;
       end;
     SQL_TYPE_DATE :
-      TrType := ftDate;
+        TrType := ftDate;
     SQL_TYPE_TIME :
         TrType := ftTime;
     SQL_TIMESTAMP :
@@ -608,9 +621,9 @@ begin
     SQL_BLOB :
       begin
         if SQLSubType = isc_blob_text then
-           TrType := ftMemo
+          TrType := ftMemo
         else
-           TrType := ftBlob;
+          TrType := ftBlob;
         TrLen := SQLLen;
       end;
     SQL_SHORT :
@@ -630,7 +643,7 @@ begin
   end;
 end;
 
-Function TIBConnection.AllocateCursorHandle : TSQLCursor;
+function TIBConnection.AllocateCursorHandle: TSQLCursor;
 
 var curs : TIBCursor;
 
@@ -654,7 +667,7 @@ begin
   FreeAndNil(cursor);
 end;
 
-Function TIBConnection.AllocateTransactionHandle : TSQLHandle;
+function TIBConnection.AllocateTransactionHandle: TSQLHandle;
 
 begin
   result := TIBTrans.create;
@@ -679,8 +692,11 @@ begin
     tr := aTransaction.Handle;
     
     if assigned(AParams) and (AParams.count > 0) then
+      begin
       buf := AParams.ParseSQL(buf,false,sqEscapeSlash in ConnOptions, sqEscapeRepeat in ConnOptions,psInterbase,paramBinding);
-
+      if LogEvent(detActualSQL) then
+        Log(detActualSQL,Buf);
+      end;
     if isc_dsql_prepare(@Status[0], @tr, @Statement, 0, @Buf[1], Dialect, nil) <> 0 then
       CheckError('PrepareStatement', Status);
     if assigned(AParams) and (AParams.count > 0) then
@@ -718,7 +734,7 @@ begin
     BlockSize:=isc_vax_integer(@resbuf[1],2);
     IBStatementType:=isc_vax_integer(@resbuf[3],blockSize);
     assert(resbuf[3+blockSize]=isc_info_end);
-    // If the statementtype is isc_info_sql_stmt_exec_procedure then
+    // If the StatementType is isc_info_sql_stmt_exec_procedure then
     // override the statement type derived by parsing the query.
     // This to recognize statements like 'insert into .. returning' correctly
     case IBStatementType of
@@ -740,6 +756,7 @@ begin
         if isc_dsql_describe(@Status[0], @Statement, 1, SQLDA) <> 0 then
           CheckError('PrepareSelect', Status);
         end;
+      FSelectable := SQLDA^.SQLD > 0;
       {$push}
       {$R-}
       for x := 0 to SQLDA^.SQLD - 1 do with SQLDA^.SQLVar[x] do
@@ -822,6 +839,8 @@ var tr : pointer;
 begin
   tr := aTransaction.Handle;
   if Assigned(APArams) and (AParams.count > 0) then SetParameters(cursor, atransaction, AParams);
+  if LogEvent(detParamValue) then
+    LogParams(AParams);
   with cursor as TIBCursor do
   begin
     if FStatementType = stExecProcedure then
@@ -988,14 +1007,6 @@ begin
       VSQLVar^.SQLInd^ := 0;
 
       case (VSQLVar^.sqltype and not 1) of
-        SQL_LONG :
-          begin
-            if VSQLVar^.sqlscale = 0 then
-              i := AParams[ParNr].AsInteger
-            else
-              i := Round(AParams[ParNr].AsCurrency * IntPower10(-VSQLVar^.sqlscale));
-            Move(i, VSQLVar^.SQLData^, VSQLVar^.SQLLen);
-          end;
         SQL_SHORT, SQL_BOOLEAN_INTERBASE :
           begin
             if VSQLVar^.sqlscale = 0 then
@@ -1005,6 +1016,26 @@ begin
             i := si;
             Move(i, VSQLVar^.SQLData^, VSQLVar^.SQLLen);
           end;
+        SQL_LONG :
+          begin
+            if VSQLVar^.sqlscale = 0 then
+              i := AParams[ParNr].AsInteger
+            else
+              i := Round(AParams[ParNr].AsFloat * IntPower10(-VSQLVar^.sqlscale)); //*any number of digits
+            Move(i, VSQLVar^.SQLData^, VSQLVar^.SQLLen);
+          end;
+        SQL_INT64:
+          begin
+            if VSQLVar^.sqlscale = 0 then
+              li := AParams[ParNr].AsLargeInt
+            else if AParams[ParNr].DataType = ftFMTBcd then
+              li := AParams[ParNr].AsFMTBCD * IntPower10(-VSQLVar^.sqlscale)
+            else
+              li := Round(AParams[ParNr].AsCurrency * IntPower10(-VSQLVar^.sqlscale));
+            Move(li, VSQLVar^.SQLData^, VSQLVar^.SQLLen);
+          end;
+        SQL_DOUBLE, SQL_FLOAT:
+          SetFloat(VSQLVar^.SQLData, AParams[ParNr].AsFloat, VSQLVar^.SQLLen);
         SQL_BLOB :
           SetBlobParam;
         SQL_VARYING, SQL_TEXT :
@@ -1045,18 +1076,6 @@ begin
           end;
         SQL_TYPE_DATE, SQL_TYPE_TIME, SQL_TIMESTAMP :
           SetDateTime(VSQLVar^.SQLData, AParams[ParNr].AsDateTime, VSQLVar^.SQLType);
-        SQL_INT64:
-          begin
-            if VSQLVar^.sqlscale = 0 then
-              li := AParams[ParNr].AsLargeInt
-            else if AParams[ParNr].DataType = ftFMTBcd then
-              li := AParams[ParNr].AsFMTBCD * IntPower10(-VSQLVar^.sqlscale)
-            else
-              li := Round(AParams[ParNr].AsCurrency * IntPower10(-VSQLVar^.sqlscale));
-            Move(li, VSQLVar^.SQLData^, VSQLVar^.SQLLen);
-          end;
-        SQL_DOUBLE, SQL_FLOAT:
-          SetFloat(VSQLVar^.SQLData, AParams[ParNr].AsFloat, VSQLVar^.SQLLen);
         SQL_BOOLEAN_FIREBIRD:
           PByte(VSQLVar^.SQLData)^ := Byte(AParams[ParNr].AsBoolean);
       else
@@ -1377,12 +1396,27 @@ begin
                           '(r.rdb$system_flag = 0 or r.rdb$system_flag is null) and (rdb$relation_name = ''' + Uppercase(SchemaObjectName) + ''') ' +
                         'ORDER BY '+
                           'r.rdb$field_name';
+    stSequences  : s := 'SELECT ' +
+                          'rdb$generator_id         as recno,' +
+                          '''' + DatabaseName + ''' as sequence_catalog,' +
+                          '''''                     as sequence_schema,' +
+                          'rdb$generator_name       as sequence_name ' +
+                        'FROM ' +
+                          'rdb$generators ' +
+                        'WHERE ' +
+                          'rdb$system_flag = 0 or rdb$system_flag is null ' +
+                        'ORDER BY ' +
+                          'rdb$generator_name';
   else
     DatabaseError(SMetadataUnavailable)
   end; {case}
   result := s;
 end;
 
+function TIBConnection.GetNextValueSQL(const SequenceName: string; IncrementBy: Integer): string;
+begin
+  Result := Format('SELECT gen_id(%s, %d) FROM RDB$DATABASE', [SequenceName, IncrementBy]);
+end;
 
 procedure TIBConnection.UpdateIndexDefs(IndexDefs : TIndexDefs;TableName : string);
 
@@ -1469,7 +1503,7 @@ begin
   end;
 end;
 
-procedure TIBConnection.GetFloat(CurrBuff, Buffer : pointer; Size : byte);
+procedure TIBConnection.GetFloat(CurrBuff, Buffer: pointer; Size: Byte);
 var
   Ext : extended;
   Dbl : double;
@@ -1607,29 +1641,41 @@ end;
 
 class function TIBConnectionDef.DefaultLibraryName: String;
 begin
+{$IFDEF LinkDynamically}
   If UseEmbeddedFirebird then
     Result:=fbembedlib
   else
-    Result:=fbclib
+    Result:=fbclib;
+{$ELSE}
+  Result:='';
+{$ENDIF}
 end;
 
 class function TIBConnectionDef.LoadFunction: TLibraryLoadFunction;
 begin
+{$IFDEF LinkDynamically}
   Result:=@InitialiseIBase60;
+{$ELSE}
+  Result:=nil;
+{$ENDIF}
 end;
 
 class function TIBConnectionDef.UnLoadFunction: TLibraryUnLoadFunction;
 begin
+{$IFDEF LinkDynamically}
   Result:=@ReleaseIBase60
+{$ELSE}
+  Result:=nil;
+{$ENDIF}
 end;
 
 class function TIBConnectionDef.LoadedLibraryName: string;
 begin
-  {$IfDef LinkDynamically}
+{$IFDEF LinkDynamically}
   Result:=IBaseLoadedLibrary;
-  {$else}
+{$ELSE}
   Result:='';
-  {$endif}
+{$ENDIF}
 end;
 
 initialization

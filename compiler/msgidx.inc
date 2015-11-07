@@ -25,6 +25,7 @@ const
   general_i_number_of_notes=01023;
   general_f_ioerror=01024;
   general_f_oserror=01025;
+  general_e_exception_raised=01026;
   scan_f_end_of_file=02000;
   scan_f_string_exceeds_line=02001;
   scan_f_illegal_char=02002;
@@ -440,6 +441,11 @@ const
   parser_e_overloaded_have_same_mangled_name=03336;
   parser_e_default_value_val_const=03337;
   parser_w_ptr_type_ignored=03338;
+  parser_e_global_generic_references_static=03339;
+  parser_u_already_compiled=03340;
+  parser_e_explicit_method_implementation_for_specializations_not_allowed=03341;
+  parser_e_no_genfuncs_in_interfaces=03342;
+  parser_e_genfuncs_cannot_be_virtual=03343;
   type_e_mismatch=04000;
   type_e_incompatible_types=04001;
   type_e_not_equal_types=04002;
@@ -553,6 +559,7 @@ const
   type_e_type_not_allowed_for_type_helper=04120;
   type_e_procedure_must_be_far=04121;
   type_w_instance_abstract_class=04122;
+  type_e_function_reference_kind=04123;
   sym_e_id_not_found=05000;
   sym_f_internal_error_in_symtablestack=05001;
   sym_e_duplicate_id=05002;
@@ -628,6 +635,13 @@ const
   sym_e_no_matching_inherited_parameterless_constructor=05086;
   sym_d_adding_helper_for=05087;
   sym_e_param_list=05088;
+  sym_w_uninitialized_managed_local_variable=05089;
+  sym_w_uninitialized_managed_variable=05090;
+  sym_h_uninitialized_managed_local_variable=05091;
+  sym_h_uninitialized_managed_variable=05092;
+  sym_w_managed_function_result_uninitialized=05093;
+  sym_h_managed_function_result_uninitialized=05094;
+  sym_w_duplicate_id=05095;
   cg_e_parasize_too_big=06009;
   cg_e_file_must_call_by_reference=06012;
   cg_e_cant_use_far_pointer_there=06013;
@@ -662,6 +676,7 @@ const
   cg_e_mod_only_defined_for_pos_quotient=06054;
   cg_d_autoinlining=06055;
   cg_e_function_not_support_by_selected_instruction_set=06056;
+  cg_f_max_units_reached=06057;
   asmr_d_start_reading=07000;
   asmr_d_finish_reading=07001;
   asmr_e_none_label_contain_at=07002;
@@ -783,6 +798,7 @@ const
   asmr_w_check_mem_operand_negative_offset=07123;
   asmr_w_check_mem_operand_automap_multiple_size=07124;
   asmr_e_invalid_ref_register=07125;
+  asmr_e_seg_without_identifier=07126;
   asmw_f_too_many_asm_files=08000;
   asmw_f_assembler_output_not_supported=08001;
   asmw_f_comp_not_supported=08002;
@@ -810,6 +826,11 @@ const
   asmw_e_prologue_too_large=08024;
   asmw_e_handlerdata_no_handler=08025;
   asmw_f_too_many_relocations=08026;
+  asmw_w_changing_bind_type=08027;
+  asmw_h_changing_bind_type=08028;
+  asmw_e_32bit_not_supported=08029;
+  asmw_f_code_segment_too_large=08030;
+  asmw_f_data_segment_too_large=08031;
   exec_w_source_os_redefined=09000;
   exec_i_assembling_pipe=09001;
   exec_d_cant_create_asmfile=09002;
@@ -855,6 +876,11 @@ const
   execinfo_x_stackcommit=09134;
   link_f_executable_too_big=09200;
   link_w_32bit_absolute_reloc=09201;
+  link_e_program_segment_too_large=09202;
+  link_e_code_segment_too_large=09203;
+  link_e_data_segment_too_large=09204;
+  link_e_segment_too_large=09205;
+  link_e_group_too_large=09206;
   unit_t_unitsearch=10000;
   unit_t_ppu_loading=10001;
   unit_u_ppu_name=10002;
@@ -994,9 +1020,9 @@ const
   option_info=11024;
   option_help_pages=11025;
 
-  MsgTxtSize = 72030;
+  MsgTxtSize = 76232;
 
   MsgIdxMax : array[1..20] of longint=(
-    26,99,339,123,89,57,126,27,202,64,
+    27,99,344,124,96,58,127,32,207,64,
     58,20,1,1,1,1,1,1,1,1
   );

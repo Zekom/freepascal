@@ -54,7 +54,11 @@ interface
         final_asmnode : tasmnode;
         final_used : boolean;
         dfabuilder : TDFABuilder;
+
         destructor  destroy;override;
+
+        function calc_stackframe_size : longint;override;
+
         procedure printproc(pass:string);
         procedure generate_code;
         procedure generate_code_tree;
@@ -109,9 +113,13 @@ implementation
 {$endif}
        { parser }
        scanner,gendef,
-       pbase,pstatmnt,pdecl,pdecsub,pexports,pgenutil,pparautl,
+       pbase,pstatmnt,pdecl,pdecsub,pexports,pgenutil,pparautl,pgentype,
        { codegen }
        tgobj,cgbase,cgobj,cgutils,hlcgobj,hlcgcpu,dbgbase,
+{$ifdef llvm}
+      { override create_hlcodegen from hlcgcpu }
+      hlcgllvm,
+{$endif}
        ncgutil,regvars,
        optbase,
        opttail,
@@ -137,6 +145,11 @@ implementation
         currpara : tparavarsym;
       begin
         result := false;
+        { this code will never be used (only specialisations can be inlined),
+          and moreover contains references to defs that are not stored in the
+          ppu file }
+        if df_generic in current_procinfo.procdef.defoptions then
+          exit;
         if pi_has_assembler_block in current_procinfo.flags then
           begin
             Message1(parser_h_not_supported_for_inline,'assembler');
@@ -152,6 +165,12 @@ implementation
         if pi_has_nested_exit in current_procinfo.flags then
           begin
             Message1(parser_h_not_supported_for_inline,'nested exit');
+            Message(parser_h_inlining_disabled);
+            exit;
+          end;
+        if pi_calls_c_varargs in current_procinfo.flags then
+          begin
+            Message1(parser_h_not_supported_for_inline,'called C-style varargs functions');
             Message(parser_h_inlining_disabled);
             exit;
           end;
@@ -262,7 +281,10 @@ implementation
         if (tsym(p).typ=paravarsym) then
           begin
             if tparavarsym(p).needs_finalization then
-              include(current_procinfo.flags,pi_needs_implicit_finally);
+              begin
+                include(current_procinfo.flags,pi_needs_implicit_finally);
+                include(current_procinfo.flags,pi_do_call);
+              end;
             if (tparavarsym(p).varspez in [vs_value,vs_out]) and
                (cs_create_pic in current_settings.moduleswitches) and
                (tf_pic_uses_got in target_info.flags) and
@@ -281,6 +303,7 @@ implementation
            is_managed_type(tlocalvarsym(p).vardef) then
           begin
             include(current_procinfo.flags,pi_needs_implicit_finally);
+            include(current_procinfo.flags,pi_do_call);
             if is_rtti_managed_type(tlocalvarsym(p).vardef) and
               (cs_create_pic in current_settings.moduleswitches) and
               (tf_pic_uses_got in target_info.flags) then
@@ -462,7 +485,7 @@ implementation
                                     voidpointertype),
                                 ccallnode.create(nil,tprocsym(srsym),srsym.owner,
                                   ctypeconvnode.create_internal(load_self_pointer_node,cclassrefdef.create(current_structdef)),
-                                  [])),
+                                  [],nil)),
                             nil));
                       end
                     else
@@ -509,7 +532,7 @@ implementation
                          if assigned(srsym) and
                             (srsym.typ=procsym) then
                            begin
-                             call:=ccallnode.create(nil,tprocsym(srsym),srsym.owner,load_self_node,[cnf_inherited]);
+                             call:=ccallnode.create(nil,tprocsym(srsym),srsym.owner,load_self_node,[cnf_inherited],nil);
                              exclude(tcallnode(call).callnodeflags,cnf_return_value_used);
                              addstatement(newstatement,call);
                            end
@@ -551,7 +574,7 @@ implementation
                               load_vmt_pointer_node,ptrsinttype),
                             ctypeconvnode.create_internal(
                               cnilnode.create,ptrsinttype)),
-                        ccallnode.create(nil,tprocsym(srsym),srsym.owner,load_self_node,[]),
+                        ccallnode.create(nil,tprocsym(srsym),srsym.owner,load_self_node,[],nil),
                         nil));
                   end
                 else
@@ -602,7 +625,7 @@ implementation
                                         load_vmt_pointer_node,
                                         voidpointertype),
                                     cpointerconstnode.create(0,voidpointertype))),
-                            ccallnode.create(nil,tprocsym(srsym),srsym.owner,load_self_node,[]),
+                            ccallnode.create(nil,tprocsym(srsym),srsym.owner,load_self_node,[],nil),
                             nil));
                       end
                     else
@@ -662,6 +685,12 @@ implementation
            final_asmnode.free;
          inherited destroy;
        end;
+
+
+    function tcgprocinfo.calc_stackframe_size:longint;
+      begin
+        result:=Align(tg.direction*tg.lasttemp,current_settings.alignment.localalignmin);
+      end;
 
 
     procedure tcgprocinfo.printproc(pass:string);
@@ -742,7 +771,7 @@ implementation
                         caddnode.create(unequaln,
                           load_vmt_pointer_node,
                           cnilnode.create)),
-                        ccallnode.create(nil,tprocsym(srsym),srsym.owner,load_self_node,[]),
+                        ccallnode.create(nil,tprocsym(srsym),srsym.owner,load_self_node,[],nil),
                         nil));
                     tocode:=afterconstructionblock;
                   end
@@ -770,7 +799,7 @@ implementation
                             load_vmt_pointer_node,
                             cnilnode.create),
                           { cnf_create_failed -> don't call BeforeDestruction }
-                          ccallnode.create(nil,tprocsym(pd.procsym),pd.procsym.owner,load_self_node,[cnf_create_failed]),
+                          ccallnode.create(nil,tprocsym(pd.procsym),pd.procsym.owner,load_self_node,[cnf_create_failed],nil),
                           nil))
                     else
                       { object without destructor, call 'fail' helper }
@@ -855,7 +884,6 @@ implementation
            (pi_needs_implicit_finally in flags) and
            { but it's useless in init/final code of units }
            not(procdef.proctypeoption in [potype_unitfinalize,potype_unitinit]) and
-           not(po_assembler in procdef.procoptions) and
            not(target_info.system in systems_garbage_collected_managed_types) then
           begin
             { Any result of managed type must be returned in parameter }
@@ -941,11 +969,13 @@ implementation
       end;
 
 
+{$if defined(i386) or defined(x86_64) or defined(arm)}
     const
       exception_flags: array[boolean] of tprocinfoflags = (
         [],
         [pi_uses_exceptions,pi_needs_implicit_finally,pi_has_implicit_finally]
       );
+{$endif}
 
     procedure tcgprocinfo.setup_tempgen;
       begin
@@ -1189,8 +1219,24 @@ implementation
         templist : TAsmList;
         headertai : tai;
         i : integer;
-        varsym : tabstractnormalvarsym;
         {RedoDFA : boolean;}
+
+        procedure delete_marker(anode: tasmnode);
+          var
+            ai: tai;
+          begin
+            if assigned(anode) then
+              begin
+                ai:=anode.currenttai;
+                if assigned(ai) then
+                  begin
+                    aktproccode.remove(ai);
+                    ai.free;
+                    anode.currenttai:=nil;
+                  end;
+              end;
+          end;
+
       begin
         { the initialization procedure can be empty, then we
           don't need to generate anything. When it was an empty
@@ -1266,11 +1312,19 @@ implementation
         { there's always a call to FPC_INITIALIZEUNITS/FPC_DO_EXIT in the main program }
         if (procdef.localst.symtablelevel=main_program_level) and
            (not current_module.is_unit) then
-          include(flags,pi_do_call);
+          begin
+            include(flags,pi_do_call);
+            { the main program never returns due to the do_exit call }
+            if not(DLLsource) then
+              include(procdef.procoptions,po_noreturn);
+          end;
 
         { set implicit_finally flag when there are locals/paras to be finalized }
-        procdef.parast.SymList.ForEachCall(@check_finalize_paras,nil);
-        procdef.localst.SymList.ForEachCall(@check_finalize_locals,nil);
+        if not(po_assembler in current_procinfo.procdef.procoptions) then
+          begin
+            procdef.parast.SymList.ForEachCall(@check_finalize_paras,nil);
+            procdef.localst.SymList.ForEachCall(@check_finalize_locals,nil);
+          end;
 
 {$ifdef SUPPORT_SAFECALL}
         { set implicit_finally flag for if procedure is safecall }
@@ -1318,7 +1372,23 @@ implementation
               for i:=0 to dfabuilder.nodemap.count-1 do
                 begin
                   if DFASetIn(GetUserCode.optinfo^.life,i) then
-                    CheckAndWarn(GetUserCode,tnode(dfabuilder.nodemap[i]));
+                    begin
+                      { do not warn for certain parameters: }
+                      if not((tnode(dfabuilder.nodemap[i]).nodetype=loadn) and (tloadnode(dfabuilder.nodemap[i]).symtableentry.typ=paravarsym) and
+                        { do not warn about parameters passed by var }
+                        (((tparavarsym(tloadnode(dfabuilder.nodemap[i]).symtableentry).varspez=vs_var) and
+                        { function result is passed by var but it must be initialized }
+                        not(vo_is_funcret in tparavarsym(tloadnode(dfabuilder.nodemap[i]).symtableentry).varoptions)) or
+                        { do not warn about initialized hidden parameters }
+                        ((tparavarsym(tloadnode(dfabuilder.nodemap[i]).symtableentry).varoptions*[vo_is_high_para,vo_is_parentfp,vo_is_result,vo_is_self])<>[]))) then
+                        CheckAndWarn(GetUserCode,tnode(dfabuilder.nodemap[i]));
+                    end
+                  else
+                    begin
+                      if (tnode(dfabuilder.nodemap[i]).nodetype=loadn) and
+                        (tloadnode(dfabuilder.nodemap[i]).symtableentry.typ in [staticvarsym,localvarsym]) then
+                        tabstractnormalvarsym(tloadnode(dfabuilder.nodemap[i]).symtableentry).noregvarinitneeded:=true
+                    end;
                 end;
           end;
 
@@ -1576,10 +1646,19 @@ implementation
             if (cs_implicit_exceptions in current_settings.moduleswitches) and
                not(procdef.proctypeoption in [potype_unitfinalize,potype_unitinit]) and
                (pi_needs_implicit_finally in flags) and
-               not(po_assembler in procdef.procoptions) and
                not(pi_has_implicit_finally in flags) and
                not(target_info.system in systems_garbage_collected_managed_types) then
              internalerror(200405231);
+
+            { Position markers are only used to insert additional code after the secondpass
+              and before this point. They are of no use in optimizer. Instead of checking and
+              ignoring all over the optimizer, just remove them here. }
+            delete_marker(entry_asmnode);
+            delete_marker(loadpara_asmnode);
+            delete_marker(exitlabel_asmnode);
+            delete_marker(stackcheck_asmnode);
+            delete_marker(init_asmnode);
+            delete_marker(final_asmnode);
 
 {$ifndef NoOpt}
             if not(cs_no_regalloc in current_settings.globalswitches) then
@@ -1763,11 +1842,11 @@ implementation
              { Give an error for accesses in the static symtable that aren't visible
                outside the current unit }
              st:=procdef.owner;
-             while (st.symtabletype=ObjectSymtable) do
+             while (st.symtabletype in [ObjectSymtable,recordsymtable]) do
                st:=st.defowner.owner;
              if (pi_uses_static_symtable in flags) and
                 (st.symtabletype<>staticsymtable) then
-               Comment(V_Error,'Global Generic template references static symtable');
+               Message(parser_e_global_generic_references_static);
            end;
 
          { save exit info }
@@ -1783,7 +1862,9 @@ implementation
              entrypos:=code.fileinfo;
 
              { Finish type checking pass }
-             do_typecheckpass(code);
+             { type checking makes no sense in a generic definition }
+             if not(df_generic in current_procinfo.procdef.defoptions) then
+               do_typecheckpass(code);
 
              if assigned(procdef.parentfpinitblock) then
                begin
@@ -1965,7 +2046,6 @@ implementation
         old_current_specializedef: tstoreddef;
         pdflags    : tpdflags;
         pd,firstpd : tprocdef;
-        s          : string;
       begin
          { save old state }
          old_current_procinfo:=current_procinfo;
@@ -2084,34 +2164,28 @@ implementation
                      if tf_has_dllscanner in target_info.flags then
                        current_module.dllscannerinputlist.Add(proc_get_importname(pd),pd);
                    end;
-
-                 { External declared in implementation, and there was already a
-                   forward (or interface) declaration then we need to generate
-                   a stub that calls the external routine }
+{$ifdef cpuhighleveltarget}
+                 { it's hard to factor this out in a virtual method, because the
+                   generic version (the one inside this ifdef) doesn't fit in
+                   hlcgobj but in symcreat or here, while the other version
+                   doesn't fit in symcreat (since it uses the code generator).
+                   Maybe we need another class for this kind of code that could
+                   either be symcreat- or hlcgobj-based
+                 }
                  if (not pd.forwarddef) and
-                    (pd.hasforward)
-                    { it is unclear to me what's the use of the following condition,
-                      so commented out, see also issue #18371 (FK)
-                    and
-                    not(
-                        assigned(pd.import_dll) and
-                        (target_info.system in [system_i386_wdosx,
-                                                system_arm_wince,system_i386_wince])
-                       ) } then
+                    (pd.hasforward) and
+                    (proc_get_importname(pd)<>'') then
+                   call_through_new_name(pd,proc_get_importname(pd))
+                 else
+{$endif cpuhighleveltarget}
                    begin
-                     s:=proc_get_importname(pd);
-                     if s<>'' then
-                       gen_external_stub(current_asmdata.asmlists[al_procedures],pd,s);
-                     { remove the external stuff, so that the interface crc
-                       doesn't change. This makes the function calls less
-                       efficient, but it means that the interface doesn't
-                       change if the function is ever redirected to another
-                       function or implemented in the unit. }
-                     pd.procoptions:=pd.procoptions-[po_external,po_has_importname,po_has_importdll];
-                     stringdispose(pd.import_name);
-                     stringdispose(pd.import_dll);
-                     pd.import_nr:=0;
-                   end;
+                     create_hlcodegen;
+                     hlcg.handle_external_proc(
+                       current_asmdata.asmlists[al_procedures],
+                       pd,
+                       proc_get_importname(pd));
+                     destroy_hlcodegen;
+                   end
                end;
            end;
 
@@ -2119,7 +2193,7 @@ implementation
          { treated as references to external symbols, needed for darwin.   }
 
          { make sure we don't change the binding of real external symbols }
-         if not(po_external in pd.procoptions) then
+         if ([po_external,po_weakexternal]*pd.procoptions)=[] then
            begin
              if (po_global in pd.procoptions) or
                 (cs_profile in current_settings.moduleswitches) then

@@ -361,7 +361,7 @@ Unit AoptObj;
 
     function JumpTargetOp(ai: taicpu): poper; inline;
       begin
-{$ifdef MIPS}
+{$if defined(MIPS)}
         { MIPS branches can have 1,2 or 3 operands, target label is the last one. }
         result:=ai.oper[ai.ops-1];
 {$else MIPS}
@@ -859,8 +859,6 @@ Unit AoptObj;
 
 
       procedure TAOptObj.UpdateUsedRegs(p : Tai);
-        var
-          i : TRegisterType;
         begin
           { this code is based on TUsedRegs.Update to avoid multiple passes through the asmlist,
             the code is duplicated here }
@@ -1041,6 +1039,9 @@ Unit AoptObj;
         Repeat
           While Assigned(StartPai) And
                 ((StartPai.typ in (SkipInstr - [ait_regAlloc])) Or
+{$if defined(MIPS) or defined(SPARC)}
+                ((startpai.typ=ait_instruction) and (taicpu(startpai).opcode=A_NOP)) or
+{$endif MIPS or SPARC}
                  ((StartPai.typ = ait_label) and
                   Not(Tai_Label(StartPai).labsym.Is_Used))) Do
             StartPai := Tai(StartPai.Next);
@@ -1173,12 +1174,29 @@ Unit AoptObj;
       end;
 {$pop}
 
+
+    { Returns True if hp is an unconditional jump to a label }
+    function IsJumpToLabelUncond(hp: taicpu): boolean;
+      begin
+{$if defined(avr)}
+        result:=(hp.opcode in aopt_uncondjmp) and
+{$else avr}
+        result:=(hp.opcode=aopt_uncondjmp) and
+{$endif avr}
+{$if defined(arm) or defined(aarch64)}
+          (hp.condition=c_None) and
+{$endif arm or aarch64}
+          (hp.ops>0) and
+          (JumpTargetOp(hp)^.typ = top_ref) and
+          (JumpTargetOp(hp)^.ref^.symbol is TAsmLabel);
+      end;
+
+
+    { Returns True if hp is any jump to a label }
     function IsJumpToLabel(hp: taicpu): boolean;
       begin
-        result:=(hp.opcode=aopt_uncondjmp) and
-{$ifdef arm}
-          (hp.condition=c_None) and
-{$endif arm}
+        result:=hp.is_jmp and
+          (hp.ops>0) and
           (JumpTargetOp(hp)^.typ = top_ref) and
           (JumpTargetOp(hp)^.ref^.symbol is TAsmLabel);
       end;
@@ -1215,8 +1233,11 @@ Unit AoptObj;
        the level parameter denotes how deeep we have already followed the jump,
        to avoid endless loops with constructs such as "l5: ; jmp l5"           }
 
-      var p1, p2: tai;
+      var p1: tai;
+          {$if not defined(MIPS) and not defined(JVM)}
+          p2: tai;
           l: tasmlabel;
+          {$endif}
 
       begin
         GetfinalDestination := false;
@@ -1230,8 +1251,8 @@ Unit AoptObj;
                (taicpu(p1).is_jmp) then
               if { the next instruction after the label where the jump hp arrives}
                  { is unconditional or of the same type as hp, so continue       }
-                 IsJumpToLabel(taicpu(p1))
-{$ifndef MIPS}
+                 IsJumpToLabelUncond(taicpu(p1))
+{$if not defined(MIPS) and not defined(JVM)}
 { for MIPS, it isn't enough to check the condition; first operands must be same, too. }
                  or
                  conditions_equal(taicpu(p1).condition,hp.condition) or
@@ -1245,10 +1266,10 @@ Unit AoptObj;
                   SkipLabels(p1,p2) and
                   (p2.typ = ait_instruction) and
                   (taicpu(p2).is_jmp) and
-                   (IsJumpToLabel(taicpu(p2)) or
+                   (IsJumpToLabelUncond(taicpu(p2)) or
                    (conditions_equal(taicpu(p2).condition,hp.condition))) and
                   SkipLabels(p1,p1))
-{$endif MIPS}
+{$endif not MIPS and not JVM}
                  then
                 begin
                   { quick check for loops of the form "l5: ; jmp l5 }
@@ -1257,11 +1278,19 @@ Unit AoptObj;
                     exit;
                   if not GetFinalDestination(taicpu(p1),succ(level)) then
                     exit;
+{$if defined(aarch64)}
+                  { can't have conditional branches to
+                    global labels on AArch64, because the
+                    offset may become too big }
+                  if not(taicpu(hp).condition in [C_None,C_AL,C_NV]) and
+                     (tasmlabel(JumpTargetOp(taicpu(p1))^.ref^.symbol).bind<>AB_LOCAL) then
+                    exit;
+{$endif aarch64}
                   tasmlabel(JumpTargetOp(hp)^.ref^.symbol).decrefs;
                   JumpTargetOp(hp)^.ref^.symbol:=JumpTargetOp(taicpu(p1))^.ref^.symbol;
                   tasmlabel(JumpTargetOp(hp)^.ref^.symbol).increfs;
                 end
-{$ifndef MIPS}
+{$if not defined(MIPS) and not defined(JVM)}
               else
                 if conditions_equal(taicpu(p1).condition,inverse_cond(hp.condition)) then
                   if not FindAnyLabel(p1,l) then
@@ -1292,7 +1321,7 @@ Unit AoptObj;
                       if not GetFinalDestination(hp,succ(level)) then
                         exit;
                     end;
-{$endif not MIPS}
+{$endif not MIPS and not JVM}
           end;
         GetFinalDestination := true;
       end;
@@ -1337,11 +1366,15 @@ Unit AoptObj;
                         { the following if-block removes all code between a jmp and the next label,
                           because it can never be executed
                         }
-                        if IsJumpToLabel(taicpu(p)) then
+                        if IsJumpToLabelUncond(taicpu(p)) then
                           begin
                             hp2:=p;
                             while GetNextInstruction(hp2, hp1) and
-                                  (hp1.typ <> ait_label) do
+                                  (hp1.typ <> ait_label)
+{$ifdef JVM}
+                                  and (hp1.typ <> ait_jcatch)
+{$endif}
+                                  do
                               if not(hp1.typ in ([ait_label,ait_align]+skipinstr)) then
                                 begin
                                   if (hp1.typ = ait_instruction) and
@@ -1366,11 +1399,12 @@ Unit AoptObj;
                                 end
                               else break;
                             end;
-                        { remove jumps to a label coming right after them }
                         if GetNextInstruction(p, hp1) then
                           begin
                             SkipEntryExitMarker(hp1,hp1);
-                            if FindLabel(tasmlabel(JumpTargetOp(taicpu(p))^.ref^.symbol), hp1) and
+                            { remove unconditional jumps to a label coming right after them }
+                            if IsJumpToLabelUncond(taicpu(p)) and
+                              FindLabel(tasmlabel(JumpTargetOp(taicpu(p))^.ref^.symbol), hp1) and
           { TODO: FIXME removing the first instruction fails}
                                 (p<>blockstart) then
                               begin
@@ -1387,17 +1421,31 @@ Unit AoptObj;
                               end
                             else if assigned(hp1) then
                               begin
+                                { change the following jumps:
+                                    jmp<cond> lab_1         jmp<cond_inverted> lab_2
+                                    jmp       lab_2  >>>    <code>
+                                  lab_1:                  lab_2:
+                                    <code>
+                                  lab_2:
+                                }
                                 if hp1.typ = ait_label then
                                   SkipLabels(hp1,hp1);
                                 if (tai(hp1).typ=ait_instruction) and
-                                    IsJumpToLabel(taicpu(hp1)) and
-                                    GetNextInstruction(hp1, hp2) and
-                                    FindLabel(tasmlabel(JumpTargetOp(taicpu(p))^.ref^.symbol), hp2) then
+                                  IsJumpToLabelUncond(taicpu(hp1)) and
+                                  GetNextInstruction(hp1, hp2) and
+                                  IsJumpToLabel(taicpu(p)) and
+                                  FindLabel(tasmlabel(JumpTargetOp(taicpu(p))^.ref^.symbol), hp2) then
                                   begin
                                     if (taicpu(p).opcode=aopt_condjmp)
-  {$ifdef arm}
+  {$if defined(arm) or defined(aarch64)}
                                       and (taicpu(p).condition<>C_None)
-  {$endif arm}
+  {$endif arm or aarch64}
+  {$if defined(aarch64)}
+                                      { can't have conditional branches to
+                                        global labels on AArch64, because the
+                                        offset may become too big }
+                                      and (tasmlabel(JumpTargetOp(taicpu(hp1))^.ref^.symbol).bind=AB_LOCAL)
+  {$endif aarch64}
                                     then
                                       begin
                                         taicpu(p).condition:=inverse_cond(taicpu(p).condition);
@@ -1423,7 +1471,7 @@ Unit AoptObj;
                                         continue;
                                       end;
                                   end
-                                else
+                                else if IsJumpToLabel(taicpu(p)) then
                                   GetFinalDestination(taicpu(p),0);
                               end;
                           end;

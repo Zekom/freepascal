@@ -347,8 +347,8 @@ implementation
          { Generate temp procdefs to search for matching read/write
            procedures. the readprocdef will store all definitions }
          paranr:=0;
-         readprocdef:=cprocdef.create(normal_function_level);
-         writeprocdef:=cprocdef.create(normal_function_level);
+         readprocdef:=cprocdef.create(normal_function_level,true);
+         writeprocdef:=cprocdef.create(normal_function_level,true);
 
          readprocdef.struct:=astruct;
          writeprocdef.struct:=astruct;
@@ -841,7 +841,7 @@ implementation
             (def.typesym=nil) and
             check_proc_directive(true) then
            begin
-              newtype:=ctypesym.create('unnamed',def);
+              newtype:=ctypesym.create('unnamed',def,true);
               parse_var_proc_directives(tsym(newtype));
               newtype.typedef:=nil;
               def.typesym:=nil;
@@ -1154,7 +1154,7 @@ implementation
                 abssym.addroffset:=Tordconstnode(pt).value.svalue;
 {$if defined(i386) or defined(i8086)}
               tcpuabsolutevarsym(abssym).absseg:=false;
-              if (target_info.system in [system_i386_go32v2,system_i386_watcom,system_i8086_msdos]) and
+              if (target_info.system in [system_i386_go32v2,system_i386_watcom,system_i8086_msdos,system_i8086_win16]) and
                   try_to_consume(_COLON) then
                 begin
                   pt.free;
@@ -1582,7 +1582,8 @@ implementation
                  (32-bit) alignment, in which case the alignment is determined by
                  the alignment of the first field.  */
              }
-             if (target_info.abi=abi_powerpc_aix) and
+             { TODO: check whether this is also for AIX }
+             if (target_info.abi in [abi_powerpc_aix,abi_powerpc_darwin]) and
                 is_first_type and
                 (symtablestack.top.symtabletype=recordsymtable) and
                 (trecordsymtable(symtablestack.top).usefieldalignment=C_alignment) then
@@ -1757,7 +1758,7 @@ implementation
                 Message(type_e_ordinal_expr_expected);
               consume(_OF);
 
-              UnionSymtable:=trecordsymtable.create('',current_settings.packrecords);
+              UnionSymtable:=trecordsymtable.create('',current_settings.packrecords,current_settings.alignment.recordalignmin,current_settings.alignment.maxCrecordalign);
               UnionDef:=crecorddef.create('',unionsymtable);
               uniondef.isunion:=true;
 

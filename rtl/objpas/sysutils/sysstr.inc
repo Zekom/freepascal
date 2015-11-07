@@ -1062,9 +1062,6 @@ Function TextToFloat(Buffer: PChar; Out Value; ValueType: TFloatValue; Const For
 Var
   E,P : Integer;
   S : String;
-{$ifndef FPC_HAS_STR_CURRENCY}
-  TempValue: extended;
-{$endif FPC_HAS_STR_CURRENCY}
 
 Begin
   S:=StrPas(Buffer);
@@ -1088,15 +1085,7 @@ Begin
   try
     case ValueType of
       fvCurrency:
-{$ifdef FPC_HAS_STR_CURRENCY}
         Val(S,Currency(Value),E);
-{$else FPC_HAS_STR_CURRENCY}
-        begin
-          // needed for platforms where Currency = Int64
-          Val(S,TempValue,E);
-          Currency(Value) := TempValue;
-        end;
-{$endif FPC_HAS_STR_CURRENCY}
       fvExtended:
         Val(S,Extended(Value),E);
       fvDouble:
@@ -1219,11 +1208,7 @@ Begin
           fvSingle:
             Str(Single(Extended(Aligned(Value))):precision+6, Result);
           fvCurrency:
-{$ifdef FPC_HAS_STR_CURRENCY}
             Str(Currency(Aligned(Value)):precision+6, Result);
-{$else}
-            Str(Extended(Currency(Aligned(Value))):precision+8, Result);
-{$endif FPC_HAS_STR_CURRENCY}
           else
             Str(Extended(Aligned(Value)):precision+8, Result);
         end;
@@ -1316,21 +1301,21 @@ Begin
           fvSingle:
             Str(Single(Extended(Aligned(Value))):Precision+6, Result);
           fvCurrency:
-{$ifdef FPC_HAS_STR_CURRENCY}
             Str(Currency(Aligned(Value)):Precision+6, Result);
-{$else}
-            Str(Extended(Currency(Aligned(Value))):Precision+8, Result);
-{$endif FPC_HAS_STR_CURRENCY}
           else
             Str(Extended(Aligned(Value)):Precision+8, Result);
         end;
         { Delete leading spaces }
         while Result[1] = ' ' do
           System.Delete(Result, 1, 1);
-        if Result[1] = '-' then
+
+        if (Result[1]='-') and
+          { not Nan etc.? }
+          (Result[3]='.') then
           Result[3] := DS
-        else
+        else if Result[2]='.' then
           Result[2] := DS;
+
         P:=Pos('E',Result);
         if P <> 0 then
           begin
@@ -1365,11 +1350,7 @@ Begin
           fvSingle:
             Str(Single(Extended(Aligned(Value))):0:Digits, Result);
           fvCurrency:
-{$ifdef FPC_HAS_STR_CURRENCY}
             Str(Currency(Aligned(Value)):0:Digits, Result);
-{$else}
-            Str(Extended(Currency(Aligned(Value))):0:Digits, Result);
-{$endif FPC_HAS_STR_CURRENCY}
           else
             Str(Extended(Aligned(Value)):0:Digits, Result);
         end;
@@ -1390,11 +1371,7 @@ Begin
           fvSingle:
             Str(Single(Extended(Aligned(Value))):0:Digits, Result);
           fvCurrency:
-{$ifdef FPC_HAS_STR_CURRENCY}
             Str(Currency(Aligned(Value)):0:Digits, Result);
-{$else}
-            Str(Extended(Currency(Aligned(Value))):0:Digits, Result);
-{$endif FPC_HAS_STR_CURRENCY}
           else
             Str(Extended(Aligned(Value)):0:Digits, Result);
         end;
@@ -1424,11 +1401,7 @@ Begin
           fvSingle:
             Str(Single(Extended(Aligned(Value))):0:Digits, Result);
           fvCurrency:
-{$ifdef FPC_HAS_STR_CURRENCY}
             Str(Currency(Aligned(Value)):0:Digits, Result);
-{$else}
-            Str(Extended(Currency(Aligned(Value))):0:Digits, Result);
-{$endif FPC_HAS_STR_CURRENCY}
           else
             Str(Extended(Aligned(Value)):0:Digits, Result);
         end;
@@ -2242,8 +2215,12 @@ Var
         Insert('e',Exponent,1);
       End;
     DigitExponent:=DecimalPoint-2;
-    If (Digits[1]='-') Then
+    I:=1;
+    While (I<=Length(Digits)) and (Digits[i] in [' ','-']) do
+      begin
       Dec(DigitExponent);
+      Inc(i);
+      end;
     UnexpectedDigits:=DecimalPoint-1-(Placehold[1]+Placehold[2]);
   End;
 
@@ -2262,7 +2239,7 @@ Var
     Dig := 1;
     While (Fmt<FmtStop) Do
       Begin
-      //Write(Fmt[0]);
+//      WriteLn('Treating : "',Fmt[0],'"');
       Case Fmt[0] Of
         #34:
           Begin
@@ -2292,9 +2269,9 @@ Var
                       Buf[0] := Digits[N];
                       Inc(Buf);
                     end;
-                  If thousand And (Digits[N]<>'-') Then
+                  If thousand And (Not (Digits[N] in [' ','-'])) Then
                     Begin
-                    If (DigitExponent Mod 3 = 0) And (DigitExponent>0) and (N > 1) Then
+                    If (DigitExponent Mod 3 = 0) And (DigitExponent>0) Then
                       Begin
                       Buf[0] := FormatSettings.ThousandSeparator;
                       Inc(Buf);
@@ -2317,8 +2294,9 @@ Var
                   Inc(Buf);
                   End;
                 End;
+              if Digits[Dig]<>'-' then  
+                Dec(DigitExponent);
               Inc(Dig);
-              Dec(DigitExponent);
               Inc(Fmt);
               End;
             'e', 'E':
@@ -2844,6 +2822,7 @@ cd    it is better to not use those, since most implementation are not 100%
 
 
 const
+{$if defined(MSDOS) or defined(GO32V2) or defined(WATCOM) }
    { upper case translation table for character set 850 }
    CP850UCT: array[128..255] of char =
    (#128,#154,#144,#182,#142,#182,#143,#128,#210,#211,#212,#216,#215,#222,#142,#143,
@@ -2865,6 +2844,7 @@ const
     #208,#209,#136,#137,#138,#213,#161,#140,#139,#217,#218,#219,#220,#221,#141,#223,
     #162,#225,#147,#149,#228,#228,#230,#237,#232,#163,#150,#151,#236,#236,#238,#239,
     #240,#241,#242,#243,#244,#245,#246,#247,#248,#249,#250,#251,#252,#253,#254,#255);
+{$endif}
 
    { upper case translation table for character set ISO 8859/1  Latin 1  }
    CPISO88591UCT: array[192..255] of char =

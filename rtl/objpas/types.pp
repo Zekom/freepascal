@@ -12,7 +12,7 @@
 
  **********************************************************************}
 {$MODE OBJFPC}
-unit types;
+unit Types;
 
   interface
 
@@ -21,16 +21,16 @@ unit types;
        Windows;
 {$endif Windows}
 
-  {$ifdef wince}
-  //roozbeh:the reason is currently RT_RCDATA is defines in windows for wince as constant,
-  //        but in win32 it is function so here is required to redeclared.
-  //RT_RCDATA = PWideChar(10);
-  {$else}
- const
-  RT_RCDATA = PChar(10);
-  {$endif}
+{$ifdef mswindows}
+const
+  RT_RCDATA = Windows.RT_RCDATA deprecated 'Use Windows.RT_RCDATA instead';
+{$endif mswindows}
 
 type
+  TEndian = (Big,Little);
+  TDirection = (FromBeginning, FromEnd);
+  TValueRelationship = -1..1;
+  
   DWORD = LongWord;
 
   PLongint = System.PLongint;
@@ -46,23 +46,26 @@ type
   LARGE_UINT= LargeUInt;
   PLargeuInt = ^LargeuInt;
 
-  TIntegerDynArray = array of Integer;
-  TCardinalDynArray = array of Cardinal;
-  TWordDynArray = array of Word;
-  TSmallIntDynArray = array of SmallInt;
+  TBooleanDynArray = array of Boolean;
   TByteDynArray = array of Byte;
-  TShortIntDynArray = array of ShortInt;
+  TCardinalDynArray = array of Cardinal;
   TInt64DynArray = array of Int64;
-  TQWordDynArray = array of QWord;
+  TIntegerDynArray = array of Integer;
   TLongWordDynArray = array of LongWord;
+  TPointerDynArray = array of Pointer;
+  TQWordDynArray = array of QWord;
+  TShortIntDynArray = array of ShortInt;
+  TSmallIntDynArray = array of SmallInt;
+  TStringDynArray = array of AnsiString;
+  TWideStringDynArray   = array of WideString;
+  TWordDynArray = array of Word;
+  TCurrencyArray = Array of currency;
 {$ifndef FPUNONE}
   TSingleDynArray = array of Single;
   TDoubleDynArray = array of Double;
+  TExtendedDynArray = array of Extended;
+  TCompDynArray = array of Comp;
 {$endif}
-  TBooleanDynArray = array of Boolean;
-  TStringDynArray = array of AnsiString;
-  TWideStringDynArray   = array of WideString;
-  TPointerDynArray = array of Pointer;
 
 {$ifdef Windows}
   TPoint = Windows.TPoint;
@@ -106,6 +109,8 @@ type
      cy : Longint;
   end;
 {$endif Windows}
+
+
   PSize = ^TSize;
   tagSIZE = TSize;
 //  SIZE = TSize;

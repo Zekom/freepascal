@@ -541,7 +541,7 @@ implementation
          { parse loop header }
          consume(_FOR);
 
-         hloopvar:=factor(false,false);
+         hloopvar:=factor(false,false,false);
          valid_for_loopvar(hloopvar,true);
 
          if try_to_consume(_ASSIGNMENT) then
@@ -948,7 +948,7 @@ implementation
                                  with "e: Exception" the e is not necessary }
 
                                { support unit.identifier }
-                               unit_found:=try_consume_unitsym(srsym,srsymtable,t,false);
+                               unit_found:=try_consume_unitsym_no_specialize(srsym,srsymtable,t,false);
                                if srsym=nil then
                                  begin
                                    identifier_not_found(orgpattern);
@@ -961,7 +961,7 @@ implementation
                                if (srsym.typ=typesym) then
                                  begin
                                    ot:=ttypesym(srsym).typedef;
-                                   parse_nested_types(ot,false,nil);
+                                   parse_nested_types(ot,false,false,nil);
                                    check_type_valid(ot);
                                  end
                                else
@@ -1041,18 +1041,26 @@ implementation
     function _asm_statement : tnode;
       var
         asmstat : tasmnode;
-        Marker  : tai;
         reg     : tregister;
         asmreader : tbaseasmreader;
         entrypos : tfileposinfo;
+        hl : TAsmList;
       begin
          Inside_asm_statement:=true;
          asmstat:=nil;
+         hl:=nil;
          if assigned(asmmodeinfos[current_settings.asmmode]) then
            begin
              asmreader:=asmmodeinfos[current_settings.asmmode]^.casmreader.create;
              entrypos:=current_filepos;
-             asmstat:=casmnode.create(asmreader.assemble as TAsmList);
+             hl:=asmreader.assemble as TAsmList;
+             if (not hl.empty) then
+               begin
+                 { mark boundaries of assembler block, this is necessary for optimizer }
+                 hl.insert(tai_marker.create(mark_asmblockstart));
+                 hl.concat(tai_marker.create(mark_asmblockend));
+               end;
+             asmstat:=casmnode.create(hl);
              asmstat.fileinfo:=entrypos;
              asmreader.free;
            end
@@ -1068,11 +1076,6 @@ implementation
          { END is read, got a list of changed registers? }
          if try_to_consume(_LECKKLAMMER) then
            begin
-{$ifdef cpunofpu}
-             asmstat.used_regs_fpu:=[0..first_int_imreg-1];
-{$else cpunofpu}
-             asmstat.used_regs_fpu:=[0..first_fpu_imreg-1];
-{$endif cpunofpu}
              if token<>_RECKKLAMMER then
               begin
                 if po_assembler in current_procinfo.procdef.procoptions then
@@ -1082,8 +1085,12 @@ implementation
                   reg:=std_regnum_search(lower(cstringpattern));
                   if reg<>NR_NO then
                     begin
-                      if (getregtype(reg)=R_INTREGISTER) and not(po_assembler in current_procinfo.procdef.procoptions) then
-                        include(asmstat.used_regs_int,getsupreg(reg));
+                      if not(po_assembler in current_procinfo.procdef.procoptions) and assigned(hl) then
+                        begin
+                          hl.Insert(tai_regalloc.alloc(reg,nil));
+                          hl.Insert(tai_regalloc.markused(reg));
+                          hl.Concat(tai_regalloc.dealloc(reg,nil));
+                        end;
                     end
                   else
                     Message(asmr_e_invalid_register);
@@ -1091,24 +1098,11 @@ implementation
                   if not try_to_consume(_COMMA) then
                     break;
                 until false;
+                asmstat.has_registerlist:=true;
               end;
              consume(_RECKKLAMMER);
-           end
-         else
-           begin
-              asmstat.used_regs_int:=paramanager.get_volatile_registers_int(current_procinfo.procdef.proccalloption);
-              asmstat.used_regs_fpu:=paramanager.get_volatile_registers_fpu(current_procinfo.procdef.proccalloption);
            end;
 
-         { mark the start and the end of the assembler block
-           this is needed for the optimizer }
-         If Assigned(AsmStat.p_asm) Then
-           Begin
-             Marker := Tai_Marker.Create(mark_AsmBlockStart);
-             AsmStat.p_asm.Insert(Marker);
-             Marker := Tai_Marker.Create(mark_AsmBlockEnd);
-             AsmStat.p_asm.Concat(Marker);
-           End;
          Inside_asm_statement:=false;
          _asm_statement:=asmstat;
       end;
@@ -1289,53 +1283,59 @@ implementation
              if p.nodetype in [vecn,derefn,typeconvn,subscriptn,loadn] then
                maybe_call_procvar(p,false);
 
-             { blockn support because a read/write is changed into a blocknode
-               with a separate statement for each read/write operation (JM)
-               the same is true for val() if the third parameter is not 32 bit
-
-               goto nodes are created by the compiler for non local exit statements, so
-               include them as well
-             }
-             if not(p.nodetype in [nothingn,errorn,calln,ifn,assignn,breakn,inlinen,
-                                   continuen,labeln,blockn,exitn,goton]) or
-                ((p.nodetype=inlinen) and
-                 not is_void(p.resultdef)) or
-                ((p.nodetype=calln) and
-                 (assigned(tcallnode(p).procdefinition)) and
-                 (tcallnode(p).procdefinition.proctypeoption=potype_operator)) then
-               Message(parser_e_illegal_expression);
-
-             if not assigned(p.resultdef) then
-               do_typecheckpass(p);
-
-             { Specify that we don't use the value returned by the call.
-               This is used for :
-                - dispose of temp stack space
-                - dispose on FPU stack
-                - extended syntax checking }
-             if (p.nodetype=calln) then
+             { additional checks make no sense in a generic definition }
+             if not(df_generic in current_procinfo.procdef.defoptions) then
                begin
-                 exclude(tcallnode(p).callnodeflags,cnf_return_value_used);
+                 { blockn support because a read/write is changed into a blocknode
+                   with a separate statement for each read/write operation (JM)
+                   the same is true for val() if the third parameter is not 32 bit
 
-                 { in $x- state, the function result must not be ignored }
-                 if not(cs_extsyntax in current_settings.moduleswitches) and
-                    not(is_void(p.resultdef)) and
-                    { can be nil in case there was an error in the expression }
-                    assigned(tcallnode(p).procdefinition) and
-                    { allow constructor calls to drop the result if they are
-                      called as instance methods instead of class methods }
-                    not(
-                      (tcallnode(p).procdefinition.proctypeoption=potype_constructor) and
-                      is_class_or_object(tprocdef(tcallnode(p).procdefinition).struct) and
-                      assigned(tcallnode(p).methodpointer) and
-                      (tnode(tcallnode(p).methodpointer).resultdef.typ=objectdef)
-                    ) then
+                   goto nodes are created by the compiler for non local exit statements, so
+                   include them as well
+                 }
+                 if not(p.nodetype in [nothingn,errorn,calln,ifn,assignn,breakn,inlinen,
+                                       continuen,labeln,blockn,exitn,goton]) or
+                    ((p.nodetype=inlinen) and
+                     not is_void(p.resultdef)) or
+                    ((p.nodetype=calln) and
+                     (assigned(tcallnode(p).procdefinition)) and
+                     (tcallnode(p).procdefinition.proctypeoption=potype_operator)) then
                    Message(parser_e_illegal_expression);
+
+                 if not assigned(p.resultdef) then
+                   do_typecheckpass(p);
+
+                 { Specify that we don't use the value returned by the call.
+                   This is used for :
+                    - dispose of temp stack space
+                    - dispose on FPU stack
+                    - extended syntax checking }
+                 if (p.nodetype=calln) then
+                   begin
+                     exclude(tcallnode(p).callnodeflags,cnf_return_value_used);
+
+                     { in $x- state, the function result must not be ignored }
+                     if not(cs_extsyntax in current_settings.moduleswitches) and
+                        not(is_void(p.resultdef)) and
+                        { can be nil in case there was an error in the expression }
+                        assigned(tcallnode(p).procdefinition) and
+                        { allow constructor calls to drop the result if they are
+                          called as instance methods instead of class methods }
+                        not(
+                          (tcallnode(p).procdefinition.proctypeoption=potype_constructor) and
+                          is_class_or_object(tprocdef(tcallnode(p).procdefinition).struct) and
+                          assigned(tcallnode(p).methodpointer) and
+                          (tnode(tcallnode(p).methodpointer).resultdef.typ=objectdef)
+                        ) then
+                       Message(parser_e_illegal_expression);
+                   end;
                end;
              code:=p;
            end;
          end;
-         if assigned(code) then
+         if assigned(code) and
+           { type checking makes no sense in a generic definition }
+           not(df_generic in current_procinfo.procdef.defoptions) then
            begin
              typecheckpass(code);
              code.fileinfo:=filepos;
@@ -1398,9 +1398,9 @@ implementation
     function assembler_block : tnode;
       var
         p : tnode;
-{$ifndef arm}
+        {$if not(defined(sparc)) and not(defined(arm)) and not(defined(avr)) and not(defined(mips))}
         locals : longint;
-{$endif arm}
+        {$endif}
         srsym : tsym;
       begin
          if parse_generic then

@@ -1,3 +1,6 @@
+{$IFDEF MYSQL57_UP}
+  {$DEFINE MYSQL56_UP}
+{$ENDIF}
 {$IFDEF MYSQL56_UP}
   {$DEFINE MYSQL55_UP}
 {$ENDIF}
@@ -14,6 +17,9 @@ interface
 
 uses
   Classes, SysUtils,bufdataset,sqldb,db,ctypes,
+{$IFDEF mysql57}
+  mysql57dyn;
+{$ELSE}
 {$IFDEF mysql56}
   mysql56dyn;
 {$ELSE}
@@ -35,9 +41,13 @@ uses
 {$endif}
 {$endif}
 {$ENDIF}
+{$ENDIF}
 
 Const
   MySQLVersion =
+{$IFDEF mysql57}
+    '5.7';
+{$ELSE}
 {$IFDEF mysql56}
     '5.6';
 {$ELSE}
@@ -58,6 +68,18 @@ Const
   {$EndIf}
 {$endif}
 {$endif}
+{$ENDIF}
+{$ENDIF}
+
+  MariaDBVersion =
+{$IFDEF mysql57}
+    '10.1';
+{$ELSE}
+{$IFDEF mysql56}   // MariaDB 10.0 is compatible with MySQL 5.6
+    '10.';
+{$ELSE} // MariaDB 5.1..5.5 presumably report the same version number as MySQL
+    MySQLVersion;
+{$ENDIF}
 {$ENDIF}
 
 Type
@@ -93,11 +115,11 @@ Type
     procedure ExecuteDirectMySQL(const query : string);
     function EscapeString(const Str : string) : string;
   protected
-    function StrToStatementType(s : string) : TStatementType; override;
     Procedure ConnectToServer; virtual;
     Procedure SelectDatabase; virtual;
     function MySQLDataType(AField: PMYSQL_FIELD; var NewType: TFieldType; var NewSize: Integer): Boolean;
     function MySQLWriteData(AField: PMYSQL_FIELD; FieldDef: TFieldDef; Source, Dest: PChar; Len: integer; out CreateBlob : boolean): Boolean;
+
     // SQLConnection methods
     procedure DoInternalConnect; override;
     procedure DoInternalDisconnect; override;
@@ -110,6 +132,7 @@ Type
     Procedure DeAllocateCursorHandle(var cursor : TSQLCursor); override;
     Function AllocateTransactionHandle : TSQLHandle; override;
 
+    function StrToStatementType(s : string) : TStatementType; override;
     procedure PrepareStatement(cursor: TSQLCursor;ATransaction : TSQLTransaction;buf : string; AParams : TParams); override;
     procedure UnPrepareStatement(cursor:TSQLCursor); override;
     procedure FreeFldBuffers(cursor : TSQLCursor); override;
@@ -127,6 +150,7 @@ Type
     function GetSchemaInfoSQL(SchemaType : TSchemaType; SchemaObjectName, SchemaPattern : string) : string; override;
     procedure UpdateIndexDefs(IndexDefs : TIndexDefs;TableName : string); override;
     function RowsAffected(cursor: TSQLCursor): TRowsCount; override;
+    function RefreshLastInsertID(Query : TCustomSQLQuery; Field : TField): Boolean; override;
   Public
     constructor Create(AOwner : TComponent); override;
     procedure GetFieldNames(const TableName : string; List :  TStrings); override;
@@ -162,6 +186,12 @@ Type
   end;
 
 
+  {$IFDEF mysql57}
+    TMySQL57Connection = Class(TConnectionName);
+    TMySQL57ConnectionDef = Class(TMySQLConnectionDef);
+    TMySQL57Transaction = Class(TTransactionName);
+    TMySQL57Cursor = Class(TCursorName);
+  {$ELSE}
   {$IFDEF mysql56}
     TMySQL56Connection = Class(TConnectionName);
     TMySQL56ConnectionDef = Class(TMySQLConnectionDef);
@@ -201,13 +231,14 @@ Type
     {$EndIf}
   {$ENDIF}
   {$ENDIF}
+  {$ENDIF}
 
 implementation
 
 uses
   dbconst,
-  strutils,
-  dateutils,
+  StrUtils,
+  DateUtils,
   FmtBCD;
 
 const
@@ -234,6 +265,9 @@ const
      ,'MYSQL_SERVER_PUBLIC_KEY'
      ,'MYSQL_ENABLE_CLEARTEXT_PLUGIN'
      ,'MYSQL_OPT_CAN_HANDLE_EXPIRED_PASSWORDS'
+{$IFDEF MYSQL57_UP}
+     ,'MYSQL_OPT_SSL_ENFORCE'
+{$ENDIF}
 {$ENDIF}
 {$ENDIF}
 {$ENDIF}
@@ -323,7 +357,7 @@ begin
   Result := mysql_stat(FMYSQL);
 end;
 
-function TConnectionName.GetInsertID: Int64;
+Function TConnectionName.GetInsertID: int64;
 begin
   CheckConnected;
   Result:=mysql_insert_id(GetHandle);
@@ -358,9 +392,8 @@ begin
       end;
     end;
 
-  HMySQL:=mysql_real_connect(HMySQL,PChar(HostName),PChar(UserName),PChar(Password),Nil,APort,Nil,CLIENT_MULTI_RESULTS); //CLIENT_MULTI_RESULTS is required by CALL SQL statement(executes stored procedure), that produces result sets
-  If (HMySQL=Nil) then
-    MySQLError(Nil,SErrServerConnectFailed,Self);
+  if mysql_real_connect(HMySQL,PChar(HostName),PChar(UserName),PChar(Password),Nil,APort,Nil,CLIENT_MULTI_RESULTS) = nil then //CLIENT_MULTI_RESULTS is required by CALL SQL statement(executes stored procedure), that produces result sets
+    MySQLError(HMySQL,SErrServerConnectFailed,Self);
 
   if (trim(CharSet) <> '') then
     // major_version*10000 + minor_version *100 + sub_version
@@ -398,14 +431,14 @@ begin
 end;
 
 
-procedure TConnectionName.ConnectToServer;
+Procedure TConnectionName.ConnectToServer;
 begin
   ConnectMySQL(FMySQL);
   FServerInfo := strpas(mysql_get_server_info(FMYSQL));
   FHostInfo := strpas(mysql_get_host_info(FMYSQL));
 end;
 
-procedure TConnectionName.SelectDatabase;
+Procedure TConnectionName.SelectDatabase;
 begin
   if mysql_select_db(FMySQL,pchar(DatabaseName))<>0 then
     MySQLError(FMySQL,SErrDatabaseSelectFailed,Self);
@@ -459,13 +492,15 @@ end;
 
 procedure TConnectionName.DoInternalConnect;
 var
-  FullVersion, 
-  ClientVerStr: string;
+  FullVersion: string;
 begin
   InitialiseMysql;
-  Fullversion:=strpas(mysql_get_client_info());
-  ClientVerStr := copy(FullVersion,1,3);
-  If (ClientVerStr<>MySQLVersion) then
+  FullVersion:=strpas(mysql_get_client_info());
+  // Version string should start with version number:
+  // Note: in case of MariaDB version mismatch: tough luck, we report MySQL
+  // version only.
+  if (pos(MySQLVersion, FullVersion) <> 1) and
+     (pos(MariaDBVersion, FullVersion) <> 1) then
     Raise EInOutError.CreateFmt(SErrVersionMisMatch,[ClassName,MySQLVersion,FullVersion]);
   inherited DoInternalConnect;
   ConnectToServer;
@@ -485,8 +520,11 @@ begin
   Result:=FMySQL;
 end;
 
-function TConnectionName.AllocateCursorHandle: TSQLCursor;
+Function TConnectionName.AllocateCursorHandle: TSQLCursor;
 begin
+  {$IFDEF mysql57}
+    Result:=TMySQL57Cursor.Create;
+  {$ELSE}
   {$IFDEF mysql56}
     Result:=TMySQL56Cursor.Create;
   {$ELSE}
@@ -508,6 +546,7 @@ begin
     {$EndIf}
   {$EndIf}
   {$ENDIF}
+  {$ENDIF}
 end;
 
 Procedure TConnectionName.DeAllocateCursorHandle(var cursor : TSQLCursor);
@@ -516,7 +555,7 @@ begin
   FreeAndNil(cursor);
 end;
 
-function TConnectionName.AllocateTransactionHandle: TSQLHandle;
+Function TConnectionName.AllocateTransactionHandle: TSQLHandle;
 begin
 //  Result:=TTransactionName.Create;
   Result := nil;
@@ -589,7 +628,14 @@ begin
       // paramreplacestring kan een probleem geven bij postgres als hij niet meer gewoon $ is?
       C.FStatement := stringsreplace(C.FStatement,ParamNames,ParamValues,[rfReplaceAll]);
       end;
-    Log(detExecute, C.FStatement);
+
+    if LogEvent(detParamValue) then
+      LogParams(AParams);
+    if LogEvent(detExecute) then
+      Log(detExecute, C.FStatement);
+    if LogEvent(detActualSQL) then
+      Log(detActualSQL,C.FStatement);
+
     if mysql_query(FMySQL,Pchar(C.FStatement))<>0 then
       begin
       if not ForcedClose then
@@ -828,7 +874,7 @@ begin
     Result := StrToInt(S);
 end;
 
-function InternalStrToFloat(S: string): Extended;
+function InternalStrToFloat(const S: string): Extended;
 
 var
   I: Integer;
@@ -846,7 +892,7 @@ begin
   Result := StrToFloat(Tmp);
 end;
 
-function InternalStrToCurrency(S: string): Extended;
+function InternalStrToCurrency(const S: string): Currency;
 
 var
   I: Integer;
@@ -864,7 +910,7 @@ begin
   Result := StrToCurr(Tmp);
 end;
 
-function InternalStrToDate(S: string): TDateTime;
+function InternalStrToDate(const S: string): TDateTime;
 
 var
   EY, EM, ED: Word;
@@ -879,11 +925,30 @@ begin
     Result:=EncodeDate(EY, EM, ED);
 end;
 
-function InternalStrToDateTime(S: string): TDateTime;
+function StrToMSecs(const S: string): Word;
+var C: char;
+    d, MSecs: double;
+begin
+{$IFDEF MYSQL56_UP}
+  // datetime(n), where n is fractional seconds precision (between 0 and 6)
+  MSecs := 0;
+  d := 100;
+  for C in S do
+    begin
+    MSecs := MSecs + (ord(C)-ord('0'))*d;
+    d := d / 10;
+    end;
+  Result := Round(MSecs);
+{$ELSE}
+  Result := 0;
+{$ENDIF}
+end;
+
+function InternalStrToDateTime(const S: string): TDateTime;
 
 var
   EY, EM, ED: Word;
-  EH, EN, ES: Word;
+  EH, EN, ES, EMS: Word;
 
 begin
   EY := StrToInt(Copy(S, 1, 4));
@@ -892,17 +957,18 @@ begin
   EH := StrToInt(Copy(S, 12, 2));
   EN := StrToInt(Copy(S, 15, 2));
   ES := StrToInt(Copy(S, 18, 2));
+  EMS:= StrToMSecs(Copy(S, 21, 6));
   if (EY = 0) or (EM = 0) or (ED = 0) then
     Result := 0
   else
     Result := EncodeDate(EY, EM, ED);
-  Result := ComposeDateTime(Result,EncodeTime(EH, EN, ES, 0));
+  Result := ComposeDateTime(Result, EncodeTime(EH, EN, ES, EMS));
 end;
 
-function InternalStrToTime(S: string): TDateTime;
+function InternalStrToTime(const S: string): TDateTime;
 
 var
-  EH, EM, ES: Word;
+  EH, EM, ES, EMS: Word;
   p: integer;
 
 begin
@@ -910,14 +976,15 @@ begin
   EH := StrToInt(ExtractSubstr(S, p, [':'])); //hours can be 2 or 3 digits
   EM := StrToInt(ExtractSubstr(S, p, [':']));
   ES := StrToInt(ExtractSubstr(S, p, ['.']));
-  Result := EncodeTimeInterval(EH, EM, ES, 0);
+  EMS:= StrToMSecs(Copy(S, p, 6));
+  Result := EncodeTimeInterval(EH, EM, ES, EMS);
 end;
 
-function InternalStrToTimeStamp(S: string): TDateTime;
+function InternalStrToTimeStamp(const S: string): TDateTime;
 
 var
   EY, EM, ED: Word;
-  EH, EN, ES: Word;
+  EH, EN, ES, EMS: Word;
 
 begin
 {$IFNDEF mysql40}
@@ -927,6 +994,7 @@ begin
   EH := StrToInt(Copy(S, 12, 2));
   EN := StrToInt(Copy(S, 15, 2));
   ES := StrToInt(Copy(S, 18, 2));
+  EMS:= StrToMSecs(Copy(S, 21, 6));
 {$ELSE}
   EY := StrToInt(Copy(S, 1, 4));
   EM := StrToInt(Copy(S, 5, 2));
@@ -934,12 +1002,13 @@ begin
   EH := StrToInt(Copy(S, 9, 2));
   EN := StrToInt(Copy(S, 11, 2));
   ES := StrToInt(Copy(S, 13, 2));
+  EMS:= 0;
 {$ENDIF}
   if (EY = 0) or (EM = 0) or (ED = 0) then
     Result := 0
   else
     Result := EncodeDate(EY, EM, ED);
-  Result := Result + EncodeTime(EH, EN, ES, 0);
+  Result := Result + EncodeTime(EH, EN, ES, EMS);
 end;
 
 function TConnectionName.MySQLWriteData(AField: PMYSQL_FIELD; FieldDef: TFieldDef; Source, Dest: PChar; Len: integer; out CreateBlob : boolean): Boolean;
@@ -1110,11 +1179,17 @@ begin
     Result := -1;
 end;
 
+function TConnectionName.RefreshLastInsertID(Query: TCustomSQLQuery; Field: TField): Boolean;
+begin
+  Field.AsLargeInt:=GetInsertID;
+  Result := True;
+end;
+
 constructor TConnectionName.Create(AOwner: TComponent);
 const SingleBackQoutes: TQuoteChars = ('`','`');
 begin
   inherited Create(AOwner);
-  FConnOptions := FConnOptions + [sqEscapeRepeat] + [sqEscapeSlash];
+  FConnOptions := [sqEscapeRepeat, sqEscapeSlash, sqImplicitTransaction, sqLastInsertID];
   FieldNameQuoteChars:=SingleBackQoutes;
   FMySQL := Nil;
 end;
@@ -1230,6 +1305,9 @@ end;
 
 class function TMySQLConnectionDef.ConnectionClass: TSQLConnectionClass;
 begin
+  {$IFDEF mysql57}
+    Result:=TMySQL57Connection;
+  {$ELSE}
   {$IFDEF mysql56}
     Result:=TMySQL56Connection;
   {$ELSE}
@@ -1251,11 +1329,12 @@ begin
     {$endif}
   {$endif}
   {$ENDIF}
+  {$ENDIF}
 end;
 
 class function TMySQLConnectionDef.Description: String;
 begin
-  Result:='Connect to a MySQL '+MySQLVersion+'database directly via the client library';
+  Result:='Connect to a MySQL '+MySQLVersion+' database directly via the client library';
 end;
 
 class function TMySQLConnectionDef.DefaultLibraryName: String;
@@ -1278,6 +1357,12 @@ begin
   Result:=MysqlLoadedLibrary;
 end;
 
+{$IFDEF mysql57}
+  initialization
+    RegisterConnection(TMySQL57ConnectionDef);
+  finalization
+    UnRegisterConnection(TMySQL57ConnectionDef);
+{$ELSE}
 {$IFDEF mysql56}
   initialization
     RegisterConnection(TMySQL56ConnectionDef);
@@ -1316,6 +1401,7 @@ end;
     {$EndIf}
   {$ENDIF}
 {$endif}
+{$ENDIF}
 {$ENDIF}
 
 end.

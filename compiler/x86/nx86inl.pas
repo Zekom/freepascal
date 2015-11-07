@@ -30,6 +30,9 @@ interface
 
     type
        tx86inlinenode = class(tcginlinenode)
+         protected
+          procedure maybe_remove_round_trunc_typeconv; virtual;
+         public
           { first pass override
             so that the code generator will actually generate
             these nodes.
@@ -90,6 +93,12 @@ implementation
 {*****************************************************************************
                               TX86INLINENODE
 *****************************************************************************}
+
+     procedure tx86inlinenode.maybe_remove_round_trunc_typeconv;
+       begin
+         { only makes a difference for x86_64 }
+       end;
+
 
      function tx86inlinenode.first_pi : tnode;
       begin
@@ -202,6 +211,7 @@ implementation
 
      function tx86inlinenode.first_round_real : tnode;
       begin
+        maybe_remove_round_trunc_typeconv;
 {$ifdef x86_64}
         if use_vectorfpu(left.resultdef) then
           expectloc:=LOC_REGISTER
@@ -214,6 +224,7 @@ implementation
 
      function tx86inlinenode.first_trunc_real: tnode;
        begin
+         maybe_remove_round_trunc_typeconv;
          if (cs_opt_size in current_settings.optimizerswitches)
 {$ifdef x86_64}
            and not(use_vectorfpu(left.resultdef))
@@ -595,7 +606,7 @@ implementation
                    current_asmdata.CurrAsmList.concat(taicpu.op_ref(A_PREFETCHNTA,S_NO,ref));
                  end;
                else
-                 internalerror(200402021);
+                 { nothing to prefetch };
              end;
            end;
        end;
@@ -609,7 +620,7 @@ implementation
         hp : taicpu;
       begin
 {$ifdef i386}
-        if current_settings.cputype<cpu_Pentium2 then
+        if not(CPUX86_HAS_CMOV in cpu_capabilities[current_settings.cputype]) then
           begin
             opsize:=def_cgsize(left.resultdef);
             secondpass(left);
@@ -795,7 +806,6 @@ implementation
         negop3,
         negproduct,
         gotmem : boolean;
-        hp : tnode;
       begin
 {$ifndef i8086}
          if (cpu_capabilities[current_settings.cputype]*[CPUX86_HAS_FMA,CPUX86_HAS_FMA4])<>[] then

@@ -41,7 +41,6 @@ interface
 {$ELSE}
       fksysutl,
 {$ENDIF}
-
       { comphook pulls in sysutils anyways }
       cutils,cclasses,cfileutl,
       cpuinfo,
@@ -52,7 +51,7 @@ interface
          [m_delphi,m_class,m_objpas,m_result,m_string_pchar,
           m_pointer_2_procedure,m_autoderef,m_tp_procvar,m_initfinal,m_default_ansistring,
           m_out,m_default_para,m_duplicate_names,m_hintdirective,
-          m_property,m_default_inline,m_except,m_advanced_records];
+          m_property,m_default_inline,m_except,m_advanced_records,m_type_helpers];
        delphiunicodemodeswitches = delphimodeswitches + [m_systemcodepage,m_default_unicodestring];
        fpcmodeswitches =
          [m_fpc,m_string_pchar,m_nested_comment,m_repeat_forward,
@@ -84,23 +83,23 @@ interface
        treelogfilename = 'tree.log';
 
 {$if defined(CPUARM) and defined(FPUFPA)}
-       MathQNaN : tdoublerec = (bytes : (0,0,252,255,0,0,0,0));
-       MathInf : tdoublerec = (bytes : (0,0,240,127,0,0,0,0));
-       MathNegInf : tdoublerec = (bytes : (0,0,240,255,0,0,0,0));
-       MathPi : tdoublerec =  (bytes : (251,33,9,64,24,45,68,84));
+       MathQNaN : tcompdoublerec = (bytes : (0,0,252,255,0,0,0,0));
+       MathInf : tcompdoublerec = (bytes : (0,0,240,127,0,0,0,0));
+       MathNegInf : tcompdoublerec = (bytes : (0,0,240,255,0,0,0,0));
+       MathPi : tcompdoublerec =  (bytes : (251,33,9,64,24,45,68,84));
 {$else}
 {$ifdef FPC_LITTLE_ENDIAN}
-       MathQNaN : tdoublerec = (bytes : (0,0,0,0,0,0,252,255));
-       MathInf : tdoublerec = (bytes : (0,0,0,0,0,0,240,127));
-       MathNegInf : tdoublerec = (bytes : (0,0,0,0,0,0,240,255));
-       MathPi : tdoublerec = (bytes : (24,45,68,84,251,33,9,64));
-       MathPiExtended : textendedrec = (bytes : (53,194,104,33,162,218,15,201,0,64));
+       MathQNaN : tcompdoublerec = (bytes : (0,0,0,0,0,0,252,255));
+       MathInf : tcompdoublerec = (bytes : (0,0,0,0,0,0,240,127));
+       MathNegInf : tcompdoublerec = (bytes : (0,0,0,0,0,0,240,255));
+       MathPi : tcompdoublerec = (bytes : (24,45,68,84,251,33,9,64));
+       MathPiExtended : tcompextendedrec = (bytes : (53,194,104,33,162,218,15,201,0,64));
 {$else FPC_LITTLE_ENDIAN}
-       MathQNaN : tdoublerec = (bytes : (255,252,0,0,0,0,0,0));
-       MathInf : tdoublerec = (bytes : (127,240,0,0,0,0,0,0));
-       MathNegInf : tdoublerec = (bytes : (255,240,0,0,0,0,0,0));
-       MathPi : tdoublerec =  (bytes : (64,9,33,251,84,68,45,24));
-       MathPiExtended : textendedrec = (bytes : (64,0,201,15,218,162,33,104,194,53));
+       MathQNaN : tcompdoublerec = (bytes : (255,252,0,0,0,0,0,0));
+       MathInf : tcompdoublerec = (bytes : (127,240,0,0,0,0,0,0));
+       MathNegInf : tcompdoublerec = (bytes : (255,240,0,0,0,0,0,0));
+       MathPi : tcompdoublerec =  (bytes : (64,9,33,251,84,68,45,24));
+       MathPiExtended : tcompextendedrec = (bytes : (64,0,201,15,218,162,33,104,194,53));
 {$endif FPC_LITTLE_ENDIAN}
 {$endif}
 
@@ -163,9 +162,8 @@ interface
 {$endif defined(ARM)}
 
         { CPU targets with microcontroller support can add a controller specific unit }
-{$if defined(ARM) or defined(AVR) or defined(MIPSEL)}
          controllertype   : tcontrollertype;
-{$endif defined(ARM) or defined(AVR) or defined(MIPSEL)}
+
          { WARNING: this pointer cannot be written as such in record token }
          pmessage : pmessagestaterecord;
        end;
@@ -232,13 +230,12 @@ interface
        asmextraopt       : string;
 
        { things specified with parameters }
-       paratarget        : tsystem;
-       paratargetdbg     : tdbg;
-       paratargetasm     : tasm;
        paralinkoptions   : TCmdStr;
        paradynamiclinker : string;
        paraprintnodetree : byte;
+{$ifdef PREPROCWRITE}
        parapreprocess    : boolean;
+{$endif PREPROCWRITE}
        printnodefile     : text;
 
        {  typical cross compiling params}
@@ -297,7 +294,6 @@ interface
        MacOSXVersionMin,
        iPhoneOSVersionMin: string[15];
        RelocSectionSetExplicitly : boolean;
-       LinkTypeSetExplicitly : boolean;
 
        current_tokenpos,                  { position of the last token }
        current_filepos : tfileposinfo;    { current position }
@@ -307,6 +303,7 @@ interface
        nwcopyright  : string;
 
        codegenerror : boolean;           { true if there is an error reported }
+       exception_raised : boolean;           { true if there is an exception reported }
 
        block_type : tblock_type;         { type of currently parsed block }
 
@@ -323,9 +320,7 @@ interface
      { Memory sizes }
        heapsize,
        maxheapsize,
-       stacksize,
-       jmp_buf_size,
-       jmp_buf_align : longint;
+       stacksize   : longint;
 
 {$Ifdef EXTDEBUG}
      { parameter switches }
@@ -346,11 +341,6 @@ interface
 
     const
        DLLsource : boolean = false;
-
-       { used to set all registers used for each global function
-         this should dramatically decrease the number of
-         recompilations needed PM }
-       simplify_ppu : boolean = true;
 
        Inside_asm_statement : boolean = false;
 
@@ -374,6 +364,7 @@ interface
        { (this will be prefixed with the target_info.cprefix)                }
        defaultmainaliasname = 'main';
        mainaliasname : string = defaultmainaliasname;
+
 
     const
       default_settings : TSettings = (
@@ -399,7 +390,7 @@ interface
         optimizerswitches : [];
         genwpoptimizerswitches : [];
         dowpoptimizerswitches : [];
-        debugswitches : [];
+        debugswitches : [ds_dwarf_sets];
 
         setalloc : 0;
         packenum : 4;
@@ -411,7 +402,7 @@ interface
 {$endif i8086}
         maxfpuregisters : 0;
 
-{ Note: GENERIC_CPU is sued together with generic subdirectory to
+{ Note: GENERIC_CPU is used together with generic subdirectory to
   be able to compile some of the units without any real CPU.
   This is used to generate a CPU independant PPUDUMP utility. PM }
 {$ifdef GENERIC_CPU}
@@ -445,8 +436,8 @@ interface
         fputype : fpu_hard;
   {$endif sparc}
   {$ifdef arm}
-        cputype : cpu_armv3;
-        optimizecputype : cpu_armv3;
+        cputype : cpu_armv4;
+        optimizecputype : cpu_armv4;
         fputype : fpu_fpa;
   {$endif arm}
   {$ifdef x86_64}
@@ -454,11 +445,6 @@ interface
         optimizecputype : cpu_athlon64;
         fputype : fpu_sse64;
   {$endif x86_64}
-  {$ifdef ia64}
-        cputype : cpu_itanium;
-        optimizecputype : cpu_itanium;
-        fputype : fpu_itanium;
-  {$endif ia64}
   {$ifdef avr}
         cputype : cpuinfo.cpu_avr5;
         optimizecputype : cpuinfo.cpu_avr5;
@@ -502,9 +488,7 @@ interface
 {$if defined(ARM)}
         instructionset : is_arm;
 {$endif defined(ARM)}
-{$if defined(ARM) or defined(AVR) or defined(MIPSEL)}
         controllertype : ct_none;
-{$endif defined(ARM) or defined(AVR) or defined(MIPSEL)}
         pmessage : nil;
       );
 
@@ -536,9 +520,7 @@ interface
     function Setoptimizecputype(const s:string;var a:tcputype):boolean;
     function Setcputype(const s:string;var a:tsettings):boolean;
     function SetFpuType(const s:string;var a:tfputype):boolean;
-{$if defined(arm) or defined(avr) or defined(mipsel)}
     function SetControllerType(const s:string;var a:tcontrollertype):boolean;
-{$endif defined(arm) or defined(avr) or defined(mipsel)}
     function IncludeFeature(const s : string) : boolean;
     function SetMinFPConstPrec(const s: string; var a: tfloattype) : boolean;
 
@@ -554,6 +536,7 @@ interface
     function is_double_hilo_swapped: boolean;{$ifdef USEINLINE}inline;{$endif}
 {$endif ARM}
     function floating_point_range_check_error : boolean;
+    function use_dotted_functions: boolean;
 
   { hide Sysutils.ExecuteProcess in units using this one after SysUtils}
   const
@@ -838,6 +821,13 @@ implementation
            Replace(s,'$FPCTARGET',target_os_string)
          else
            Replace(s,'$FPCTARGET',target_full_string);
+         Replace(s,'$FPCSUBARCH',lower(cputypestr[init_settings.cputype]));
+         Replace(s,'$FPCABI',lower(abiinfo[target_info.abi].name));
+{$ifdef i8086}
+         Replace(s,'$FPCMEMORYMODEL',lower(x86memorymodelstr[init_settings.x86memorymodel]));
+{$else i8086}
+         Replace(s,'$FPCMEMORYMODEL','flat');
+{$endif i8086}
 {$ifdef mswindows}
          ReplaceSpecialFolder('$LOCAL_APPDATA',CSIDL_LOCAL_APPDATA);
          ReplaceSpecialFolder('$APPDATA',CSIDL_APPDATA);
@@ -968,7 +958,7 @@ implementation
           result := -1;
       end;
 
-    function convertdoublerec(d : tdoublerec) : tdoublerec;{$ifdef USEINLINE}inline;{$endif}
+    function convertdoublerec(d : tcompdoublerec) : tcompdoublerec;{$ifdef USEINLINE}inline;{$endif}
 {$ifdef CPUARM}
       var
         i : longint;
@@ -1177,23 +1167,34 @@ implementation
       end;
 
 
-{$if defined(arm) or defined(avr) or defined(mipsel)}
     function SetControllerType(const s:string;var a:tcontrollertype):boolean;
       var
         t  : tcontrollertype;
         hs : string;
       begin
-        result:=false;
-        hs:=Upper(s);
-        for t:=low(tcontrollertype) to high(tcontrollertype) do
-          if embedded_controllers[t].controllertypestr=hs then
-            begin
-              a:=t;
-              result:=true;
-              break;
-            end;
+{ The following check allows to reduce amount of code for platforms  }
+{ not supporting microcontrollers due to evaluation at compile time. }
+{$PUSH}
+ {$WARN 6018 OFF} (* Unreachable code due to compile time evaluation *)
+        if ControllerSupport then
+         begin
+          result:=false;
+          hs:=Upper(s);
+          for t:=low(tcontrollertype) to high(tcontrollertype) do
+            if embedded_controllers[t].controllertypestr=hs then
+              begin
+                a:=t;
+                result:=true;
+                break;
+              end;
+         end
+        else
+         begin
+          a := ct_none;
+          Result := true;
+         end;
+{$POP}
       end;
-{$endif defined(arm) or defined(avr) or defined(mipsel)}
 
 
     function IncludeFeature(const s : string) : boolean;
@@ -1281,6 +1282,14 @@ implementation
         result:=cs_ieee_errors in current_settings.localswitches;
       end;
 
+
+    function use_dotted_functions: boolean;
+      begin
+        result:=
+          (target_info.system in systems_dotted_function_names) and
+          (target_info.abi<>abi_powerpc_elfv2);
+      end;
+
 {****************************************************************************
                                     Init
 ****************************************************************************}
@@ -1350,9 +1359,6 @@ implementation
         compile_level:=0;
         codegenerror:=false;
         DLLsource:=false;
-        paratarget:=system_none;
-        paratargetasm:=as_none;
-        paratargetdbg:=dbg_none;
 
         { Output }
         OutputFileName:='';
@@ -1399,18 +1405,12 @@ implementation
         GenerateImportSection:=false;
         RelocSection:=false;
         RelocSectionSetExplicitly:=false;
-        LinkTypeSetExplicitly:=false;
         MacOSXVersionMin:='';
         iPhoneOSVersionMin:='';
         { memory sizes, will be overridden by parameter or default for target
           in options or init_parser }
         stacksize:=0;
         { not initialized yet }
-{$ifndef jvm}
-        jmp_buf_size:=-1;
-{$else}
-        jmp_buf_size:=0;
-{$endif}
         apptype:=app_cui;
 
         { Init values }

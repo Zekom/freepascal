@@ -255,7 +255,9 @@ interface
            end;
 
          { Allocate registers used in the assembler block }
-         cg.alloccpuregisters(current_asmdata.CurrAsmList,R_INTREGISTER,used_regs_int);
+         { has_registerlist=true means that registers are specified and already allocated }
+         if (not has_registerlist) then
+           cg.allocallcpuregisters(current_asmdata.CurrAsmList);
 
          if (po_inline in current_procinfo.procdef.procoptions) then
            begin
@@ -344,7 +346,8 @@ interface
            end;
 
          { Release register used in the assembler block }
-         cg.dealloccpuregisters(current_asmdata.CurrAsmList,R_INTREGISTER,used_regs_int);
+         if (not has_registerlist) then
+           cg.deallocallcpuregisters(current_asmdata.CurrAsmList);
        end;
 
 
@@ -421,7 +424,7 @@ interface
               not(ti_const in tempinfo^.flags) then
               begin
                 location_reset_ref(tempinfo^.location,LOC_REFERENCE,def_cgsize(tempinfo^.typedef),0);
-                tg.gethltemptyped(current_asmdata.CurrAsmList,tempinfo^.typedef,tempinfo^.temptype,tempinfo^.location.reference);
+                tg.gethltempmanaged(current_asmdata.CurrAsmList,tempinfo^.typedef,tempinfo^.temptype,tempinfo^.location.reference);
                 if not(ti_nofini in tempinfo^.flags) then
                   hlcg.g_finalize(current_asmdata.CurrAsmList,tempinfo^.typedef,tempinfo^.location.reference);
               end

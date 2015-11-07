@@ -8,12 +8,12 @@ uses fpmkunit;
 procedure add_fcl_db(const ADirectory: string);
 
 const
-  ParadoxOSes         = [beos,haiku,linux,freebsd,netbsd,openbsd,win32];
-  DatadictOSes        = [aix,beos,darwin,haiku,linux,freebsd,win32,win64,wince,android];
-  SqldbConnectionOSes = [aix,beos,haiku,linux,freebsd,darwin,iphonesim,netbsd,openbsd,solaris,win32,win64,wince,android];
-  SqliteOSes          = [aix,beos,haiku,linux,freebsd,darwin,iphonesim,netbsd,openbsd,solaris,win32,win64,wince,android];
-  DBaseOSes           = [aix,beos,haiku,linux,freebsd,darwin,iphonesim,netbsd,openbsd,solaris,win32,win64,wince,android];
-  MSSQLOSes           = [beos,haiku,linux,freebsd,netbsd,openbsd,solaris,win32,win64,android];
+  ParadoxOSes         = [beos,haiku,linux,freebsd,netbsd,openbsd,win32,dragonfly];
+  DatadictOSes        = [aix,beos,darwin,haiku,linux,freebsd,win32,win64,wince,android,dragonfly];
+  SqldbConnectionOSes = [aix,beos,haiku,linux,freebsd,darwin,iphonesim,netbsd,openbsd,solaris,win32,win64,wince,android,dragonfly];
+  SqliteOSes          = [aix,beos,haiku,linux,freebsd,darwin,iphonesim,netbsd,openbsd,solaris,win32,win64,wince,android,dragonfly];
+  DBaseOSes           = [aix,beos,haiku,linux,freebsd,darwin,iphonesim,netbsd,openbsd,solaris,win32,win64,wince,android,os2,dragonfly];
+  MSSQLOSes           = [beos,haiku,linux,freebsd,netbsd,openbsd,solaris,win32,win64,android,dragonfly];
   SqldbWithoutOracleOSes   = [win64];
 
 
@@ -25,6 +25,7 @@ begin
   With Installer do
     begin
     P:=AddPackage('fcl-db');
+    P.ShortName:='fcld';
 
     P.Author := '<various>';
     P.License := 'LGPL with modification, ';
@@ -32,10 +33,10 @@ begin
     P.Email := '';
     P.Description := 'Database library of Free Component Libraries(FCL), FPC''s OOP library.';
     P.NeedLibC:= false;
-    P.OSes:=AllOSes-[embedded,msdos];
+    P.OSes:=AllOSes-[embedded,msdos,win16];
 
     P.Directory:=ADirectory;
-    P.Version:='2.7.1';
+    P.Version:='3.1.1';
     P.SourcePath.Add('src');
     P.SourcePath.Add('src/base');
     P.SourcePath.Add('src/paradox', ParadoxOSes);
@@ -89,6 +90,14 @@ begin
           AddUnit('db');
           AddUnit('bufdataset_parser');
           AddUnit('dbconst');
+        end;
+
+    T:=P.Targets.AddUnit('csvdataset.pp');
+      with T.Dependencies do
+        begin
+        AddUnit('db');
+        AddUnit('sqldb');
+        AddUnit('bufdataset');
         end;
 
     T:=P.Targets.AddUnit('bufdataset_parser.pp');
@@ -305,6 +314,8 @@ begin
       with T.Dependencies do
         begin
           AddInclude('dbf_common.inc');
+          AddInclude('dbf_wnix.inc', AllOSes-AllWindowsOSes-[os2]);
+          AddInclude('dbf_wos2.inc', [os2]);
         end;
     T:=P.Targets.AddUnit('fpcgcreatedbf.pp', DatadictOSes);
       with T.Dependencies do
@@ -711,6 +722,7 @@ begin
           AddUnit('db');
           AddUnit('bufdataset');
           AddUnit('dbconst');
+          AddUnit('sqlscript');
         end;
     T:=P.Targets.AddUnit('sqldblib.pp');
       with T.Dependencies do

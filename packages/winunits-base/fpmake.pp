@@ -13,10 +13,11 @@ begin
 {$endif ALLPACKAGES}
 
     P:=AddPackage('winunits-base');
+    P.ShortName:='win';
 {$ifdef ALLPACKAGES}
     P.Directory:=ADirectory;
 {$endif ALLPACKAGES}
-    P.Version:='2.7.1';
+    P.Version:='3.1.1';
     P.OSes:=[win32,win64];
     P.Author := 'Florian Klaempfl, Marco van de Voort';
     P.License := 'LGPL with modification, ';
@@ -45,6 +46,7 @@ begin
           AddUnit('ole2');
           AddUnit('activex');
           AddUnit('shellapi');
+          AddUnit('shlwapi');
           AddUnit('shlobj');
           AddUnit('oleserver');
           AddUnit('shfolder');
@@ -81,6 +83,7 @@ begin
     T:=P.Targets.AddImplicitUnit('oleserver.pp');
     T:=P.Targets.AddImplicitUnit('richedit.pp');
     T:=P.Targets.AddImplicitUnit('shellapi.pp');
+    T:=P.Targets.AddImplicitUnit('shlwapi.pp');
     T:=P.Targets.AddImplicitUnit('shfolder.pp');
     T:=P.Targets.AddImplicitUnit('shlobj.pp');
     T:=P.Targets.AddImplicitUnit('winver.pp');

@@ -44,7 +44,8 @@ uses
   cobjects,
 {$endif finaldestdebug}
   cpuinfo,cpubase,cgutils,daopt386,
-  cgx86;
+  cgx86,
+  aoptx86;
 
 
 function isFoldableArithOp(hp1: taicpu; reg: tregister): boolean;
@@ -58,7 +59,7 @@ begin
           (taicpu(hp1).oper[0]^.reg <> reg))) and
         (taicpu(hp1).oper[1]^.typ = top_reg) and
         (taicpu(hp1).oper[1]^.reg = reg);
-    A_INC,A_DEC:
+    A_INC,A_DEC,A_NEG,A_NOT:
       isFoldableArithOp :=
         (taicpu(hp1).oper[0]^.typ = top_reg) and
         (taicpu(hp1).oper[0]^.reg = reg);
@@ -79,6 +80,35 @@ begin
 end;
 
 
+function IsExitCode(p : tai) : boolean;
+  var
+    hp2,hp3 : tai;
+  begin
+    result:=(p.typ=ait_instruction) and
+    ((taicpu(p).opcode = A_RET) or
+     ((taicpu(p).opcode=A_LEAVE) and
+      GetNextInstruction(p,hp2) and
+      (hp2.typ=ait_instruction) and
+      (taicpu(hp2).opcode=A_RET)
+     ) or
+     ((taicpu(p).opcode=A_MOV) and
+      (taicpu(p).oper[0]^.typ=top_reg) and
+      (taicpu(p).oper[0]^.reg=NR_EBP) and
+      (taicpu(p).oper[1]^.typ=top_reg) and
+      (taicpu(p).oper[1]^.reg=NR_ESP) and
+      GetNextInstruction(p,hp2) and
+      (hp2.typ=ait_instruction) and
+      (taicpu(hp2).opcode=A_POP) and
+      (taicpu(hp2).oper[0]^.typ=top_reg) and
+      (taicpu(hp2).oper[0]^.reg=NR_EBP) and
+      GetNextInstruction(hp2,hp3) and
+      (hp3.typ=ait_instruction) and
+      (taicpu(hp3).opcode=A_RET)
+     )
+    );
+  end;
+
+
 function doFpuLoadStoreOpt(asmL: TAsmList; var p: tai): boolean;
 { returns true if a "continue" should be done after this optimization }
 var hp1, hp2: tai;
@@ -93,14 +123,13 @@ begin
        (taicpu(hp1).opcode = A_FILD))) and
      (taicpu(hp1).oper[0]^.typ = top_ref) and
      (taicpu(hp1).opsize = taicpu(p).opsize) and
-     refsEqual(taicpu(p).oper[0]^.ref^, taicpu(hp1).oper[0]^.ref^) then
+     RefsEqual(taicpu(p).oper[0]^.ref^, taicpu(hp1).oper[0]^.ref^) then
     begin
       { replacing fstp f;fld f by fst f is only valid for extended because of rounding }
       if (taicpu(p).opsize=S_FX) and
          getNextInstruction(hp1, hp2) and
          (hp2.typ = ait_instruction) and
-         ((taicpu(hp2).opcode = A_LEAVE) or
-          (taicpu(hp2).opcode = A_RET)) and
+         IsExitCode(hp2) and
          (taicpu(p).oper[0]^.ref^.base = current_procinfo.FramePointer) and
          not(assigned(current_procinfo.procdef.funcretsym) and
              (taicpu(p).oper[0]^.ref^.offset < tabstractnormalvarsym(current_procinfo.procdef.funcretsym).localloc.reference.offset)) and
@@ -440,82 +469,6 @@ begin
       p := tai(p.next)
     end;
 end;
-
-
-function MatchInstruction(const instr: tai; const op: TAsmOp; const opsize: topsizes): boolean;
-  begin
-    result :=
-      (instr.typ = ait_instruction) and
-      (taicpu(instr).opcode = op) and
-      ((opsize = []) or (taicpu(instr).opsize in opsize));
-  end;
-
-
-function MatchInstruction(const instr: tai; const op1,op2: TAsmOp; const opsize: topsizes): boolean;
-  begin
-    result :=
-      (instr.typ = ait_instruction) and
-      ((taicpu(instr).opcode = op1) or
-       (taicpu(instr).opcode = op2)
-      ) and
-      ((opsize = []) or (taicpu(instr).opsize in opsize));
-  end;
-
-
-function MatchInstruction(const instr: tai; const op1,op2,op3: TAsmOp; const opsize: topsizes): boolean;
-  begin
-    result :=
-      (instr.typ = ait_instruction) and
-      ((taicpu(instr).opcode = op1) or
-       (taicpu(instr).opcode = op2) or
-       (taicpu(instr).opcode = op3)
-      ) and
-      ((opsize = []) or (taicpu(instr).opsize in opsize));
-  end;
-
-
-function MatchOperand(const oper: TOper; const reg: TRegister): boolean; inline;
-  begin
-    result := (oper.typ = top_reg) and (oper.reg = reg);
-  end;
-
-
-function MatchOperand(const oper: TOper; const a: tcgint): boolean; inline;
-  begin
-    result := (oper.typ = top_const) and (oper.val = a);
-  end;
-
-
-function MatchOperand(const oper1: TOper; const oper2: TOper): boolean; inline;
-  begin
-    result := oper1.typ = oper2.typ;
-
-    if result then
-      case oper1.typ of
-        top_const:
-          Result:=oper1.val = oper2.val;
-        top_reg:
-          Result:=oper1.reg = oper2.reg;
-        top_ref:
-          Result:=RefsEqual(oper1.ref^, oper2.ref^);
-        else
-          internalerror(2013102801);
-      end
-  end;
-
-
-function MatchReference(const ref : treference;base,index : TRegister) : Boolean;
-  begin
-   Result:=(ref.offset=0) and
-     (ref.scalefactor in [0,1]) and
-     (ref.segment=NR_NO) and
-     (ref.symbol=nil) and
-     (ref.relsymbol=nil) and
-     ((base=NR_INVALID) or
-      (ref.base=base)) and
-     ((index=NR_INVALID) or
-      (ref.index=index));
-  end;
 
 
 { First pass of peephole optimizations }
@@ -1214,8 +1167,7 @@ begin
                     result)}
                           if GetNextInstruction(p, hp1) and
                              (tai(hp1).typ = ait_instruction) then
-                            if ((taicpu(hp1).opcode = A_LEAVE) or
-                                (taicpu(hp1).opcode = A_RET)) and
+                            if IsExitCode(hp1) and
                                (taicpu(p).oper[1]^.typ = top_ref) and
                                (taicpu(p).oper[1]^.ref^.base = current_procinfo.FramePointer) and
                                not(assigned(current_procinfo.procdef.funcretsym) and
@@ -1873,9 +1825,7 @@ begin
                       if (taicpu(p).oper[0]^.typ = top_ref) and
                          GetNextInstruction(p, hp1) and
                          GetNextInstruction(hp1, hp2) and
-                         (hp2.typ = ait_instruction) and
-                         ((taicpu(hp2).opcode = A_LEAVE) or
-                          (taicpu(hp2).opcode = A_RET)) and
+                         IsExitCode(hp2) and
                          (taicpu(p).oper[0]^.ref^.base = current_procinfo.FramePointer) and
                          (taicpu(p).oper[0]^.ref^.index = NR_NO) and
                          not(assigned(current_procinfo.procdef.funcretsym) and
@@ -2052,7 +2002,7 @@ begin
                             end;
                         end;
                     end;
-                  if (current_settings.cputype>=cpu_Pentium2) then
+                  if CPUX86_HAS_CMOV in cpu_capabilities[current_settings.cputype] then
                     begin
                        { check for
                               jCC   xxx
@@ -2116,7 +2066,7 @@ begin
                                   (taicpu(hp2).condition=C_None) and
                                   { real label and jump, no further references to the
                                     label are allowed }
-                                  (tasmlabel(taicpu(p).oper[0]^.ref^.symbol).getrefs=2) and
+                                  (tasmlabel(taicpu(p).oper[0]^.ref^.symbol).getrefs=1) and
                                   FindLabel(tasmlabel(taicpu(p).oper[0]^.ref^.symbol),hp1) then
                                    begin
                                      l:=0;
@@ -2258,7 +2208,7 @@ begin
   { to       add/sub/or/... reg2/$const, (ref)    }
                         begin
                           case taicpu(hp1).opcode of
-                            A_INC,A_DEC:
+                            A_INC,A_DEC,A_NOT,A_NEG:
                               taicpu(hp1).loadRef(0,taicpu(p).oper[0]^.ref^);
                             A_LEA:
                               begin
@@ -2307,22 +2257,47 @@ begin
               end;
             case taicpu(p).opcode Of
               A_CALL:
-                { don't do this on modern CPUs, this really hurts them due to
-                  broken call/ret pairing }
-                if (current_settings.optimizecputype < cpu_Pentium2) and
-                   not(cs_create_pic in current_settings.moduleswitches) and
-                   GetNextInstruction(p, hp1) and
-                   (hp1.typ = ait_instruction) and
-                   (taicpu(hp1).opcode = A_JMP) and
-                   ((taicpu(hp1).oper[0]^.typ=top_ref) and (taicpu(hp1).oper[0]^.ref^.refaddr=addr_full)) then
-                  begin
-                    hp2 := taicpu.Op_sym(A_PUSH,S_L,taicpu(hp1).oper[0]^.ref^.symbol);
-                    InsertLLItem(asml, p.previous, p, hp2);
-                    taicpu(p).opcode := A_JMP;
-                    taicpu(p).is_jmp := true;
-                    asml.remove(hp1);
-                    hp1.free;
-                  end;
+                begin
+                  { don't do this on modern CPUs, this really hurts them due to
+                    broken call/ret pairing }
+                  if (current_settings.optimizecputype < cpu_Pentium2) and
+                     not(cs_create_pic in current_settings.moduleswitches) and
+                     GetNextInstruction(p, hp1) and
+                     (hp1.typ = ait_instruction) and
+                     (taicpu(hp1).opcode = A_JMP) and
+                     ((taicpu(hp1).oper[0]^.typ=top_ref) and (taicpu(hp1).oper[0]^.ref^.refaddr=addr_full)) then
+                    begin
+                      hp2 := taicpu.Op_sym(A_PUSH,S_L,taicpu(hp1).oper[0]^.ref^.symbol);
+                      InsertLLItem(asml, p.previous, p, hp2);
+                      taicpu(p).opcode := A_JMP;
+                      taicpu(p).is_jmp := true;
+                      asml.remove(hp1);
+                      hp1.free;
+                    end
+                  { replace
+                      call   procname
+                      ret
+                    by
+                      jmp    procname
+
+                    this should never hurt except when pic is used, not sure
+                    how to handle it then
+
+                    but do it only on level 4 because it destroys stack back traces
+                  }  
+                  else if (cs_opt_level4 in current_settings.optimizerswitches) and
+                     not(cs_create_pic in current_settings.moduleswitches) and
+                     GetNextInstruction(p, hp1) and
+                     (hp1.typ = ait_instruction) and
+                     (taicpu(hp1).opcode = A_RET) and
+                     (taicpu(hp1).ops=0) then
+                    begin
+                      taicpu(p).opcode := A_JMP;
+                      taicpu(p).is_jmp := true;
+                      asml.remove(hp1);
+                      hp1.free;
+                    end;
+                end;
               A_CMP:
                 begin
                   if (taicpu(p).oper[0]^.typ = top_const) and

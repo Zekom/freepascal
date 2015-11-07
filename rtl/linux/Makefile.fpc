@@ -77,6 +77,13 @@ endif
 ifeq ($(ARCH),x86_64)
 CPU_UNITS=x86 ports cpu
 SYSINIT_UNITS=si_prc si_c si_g si_dll
+override LOADERS+=abitag
+endif
+
+ifeq ($(ARCH),powerpc64)
+ifeq ($(findstring 2.6.,$(FPC_VERSION)),)
+SYSINIT_UNITS=si_prc si_c si_g si_dll
+endif
 endif
 
 # mipsel reuses mips files by including so some file names exist
@@ -103,7 +110,6 @@ endif
 OBJPASDIR=$(RTL)/objpas
 
 [rules]
-.NOTPARALLEL:
 # Get the $(SYSTEMUNIT) independent include file names.
 # This will set the following variables :
 # SYSINCNAMES
@@ -160,43 +166,70 @@ endif
 # Loaders
 #
 
-prt0$(OEXT) : $(ARCH)/prt0.as
+prt0$(OEXT) : $(ARCH)/prt0.as $(COMPILER_UNITTARGETDIR)
         $(AS) $(ASTARGET) -o $(UNITTARGETDIRPREFIX)prt0$(OEXT) $(ARCH)/prt0.as
 
+abitag$(OEXT) : $(ARCH)/abitag.as $(COMPILER_UNITTARGETDIR)
+        $(AS) $(ASTARGET) -o $(UNITTARGETDIRPREFIX)abitag$(OEXT) $(ARCH)/abitag.as
 
 # ASSHAREDOPT adds -KPIC mandatoy for mips/mipsel objects in shared libs
 #
 # the following startup files do not support thumb yet
 #
-dllprt0$(OEXT) : $(ARCH)/dllprt0.as
+dllprt0$(OEXT) : $(ARCH)/dllprt0.as $(COMPILER_UNITTARGETDIR)
 ifndef ARMTHUMB
         $(AS) $(ASTARGET) $(ASSHAREDOPT) -o $(UNITTARGETDIRPREFIX)dllprt0$(OEXT) $(ARCH)/dllprt0.as
 endif
 
-gprt0$(OEXT) : $(ARCH)/gprt0.as
+gprt0$(OEXT) : $(ARCH)/gprt0.as $(COMPILER_UNITTARGETDIR)
 ifndef ARMTHUMB
         $(AS) $(ASTARGET) -o $(UNITTARGETDIRPREFIX)gprt0$(OEXT) $(ARCH)/gprt0.as
 endif
 
-cprt0$(OEXT) : $(ARCH)/cprt0.as
+cprt0$(OEXT) : $(ARCH)/cprt0.as $(COMPILER_UNITTARGETDIR)
 ifndef ARMTHUMB
         $(AS) $(ASTARGET) -o $(UNITTARGETDIRPREFIX)cprt0$(OEXT) $(ARCH)/cprt0.as
 endif
 
-cprt21$(OEXT) : $(ARCH)/cprt21.as
+cprt21$(OEXT) : $(ARCH)/cprt21.as $(COMPILER_UNITTARGETDIR)
 ifndef ARMTHUMB
         $(AS) $(ASTARGET) -o $(UNITTARGETDIRPREFIX)cprt21$(OEXT) $(ARCH)/cprt21.as
 endif
 
-gprt21$(OEXT) : $(ARCH)/gprt21.as
+gprt21$(OEXT) : $(ARCH)/gprt21.as $(COMPILER_UNITTARGETDIR)
 ifndef ARMTHUMB
         $(AS) $(ASTARGET) -o $(UNITTARGETDIRPREFIX)gprt21$(OEXT) $(ARCH)/gprt21.as
 endif
 
-ucprt0$(OEXT) : $(ARCH)/ucprt0.as
+ucprt0$(OEXT) : $(ARCH)/ucprt0.as $(COMPILER_UNITTARGETDIR)
 ifndef ARMTHUMB
         $(AS) $(ASTARGET) -o $(UNITTARGETDIRPREFIX)$@ $<
 endif
+
+
+#
+# $(SYSINIT_UNITS) Units
+#
+si_prc$(PPUEXT) : si_prc.pp si_intf.inc $(ARCH)/sysnr.inc $(ARCH)/si_prc.inc $(SYSTEMUNIT)$(PPUEXT)
+	$(COMPILER) si_prc.pp
+
+si_c21g$(PPUEXT) : si_c21g.pp si_intf.inc $(ARCH)/sysnr.inc $(ARCH)/si_c21g.inc $(SYSTEMUNIT)$(PPUEXT)
+	$(COMPILER) si_c21g.pp
+
+si_c21$(PPUEXT) : si_c21.pp si_intf.inc $(ARCH)/sysnr.inc $(ARCH)/si_c21.inc $(SYSTEMUNIT)$(PPUEXT)
+	$(COMPILER) si_c21.pp
+
+si_c$(PPUEXT) : si_c.pp si_intf.inc $(ARCH)/sysnr.inc $(ARCH)/si_c.inc $(SYSTEMUNIT)$(PPUEXT)
+	$(COMPILER) si_c.pp
+
+si_dll$(PPUEXT) : si_dll.pp si_intf.inc $(ARCH)/sysnr.inc $(ARCH)/si_dll.inc $(SYSTEMUNIT)$(PPUEXT)
+	$(COMPILER) si_dll.pp
+
+si_uc$(PPUEXT) : si_uc.pp si_intf.inc $(ARCH)/sysnr.inc $(ARCH)/si_uc.inc $(SYSTEMUNIT)$(PPUEXT)
+	$(COMPILER) si_uc.pp
+
+si_g$(PPUEXT) : si_g.pp si_intf.inc $(ARCH)/sysnr.inc $(ARCH)/si_g.inc $(SYSTEMUNIT)$(PPUEXT)
+	$(COMPILER) si_g.pp
 
 
 #
@@ -222,7 +255,7 @@ strings$(PPUEXT) : $(INC)/strings.pp $(INC)/stringsi.inc\
 #
 
 unix$(PPUEXT) : $(UNIXINC)/unix.pp strings$(PPUEXT) baseunix$(PPUEXT) $(INC)/textrec.inc $(INC)/filerec.inc \
-                 unxconst.inc $(UNIXINC)/timezone.inc $(SYSTEMUNIT)$(PPUEXT) \
+                 unxconst.inc $(UNIXINC)/timezone.inc $(SYSTEMUNIT)$(PPUEXT) unixutil$(PPUEXT) \
                  unxfunc.inc
 	$(COMPILER) $(UNIXINC)/unix.pp
 
@@ -235,7 +268,7 @@ unixutil$(PPUEXT) : $(UNIXINC)/unixutil.pp $(INC)/textrec.inc $(INC)/filerec.inc
 unixtype$(PPUEXT) : $(UNIXINC)/unixtype.pp ptypes.inc $(UNIXINC)/ctypes.inc $(SYSTEMUNIT)$(PPUEXT)
 	$(COMPILER) $(UNIXINC)/unixtype.pp
 
-baseunix$(PPUEXT) : errno.inc ptypes.inc $(UNIXINC)/ctypes.inc \
+baseunix$(PPUEXT) : unixtype$(PPUEXT) errno.inc ptypes.inc $(UNIXINC)/ctypes.inc \
   $(UNIXINC)/bunxh.inc \
   bunxsysc.inc $(ARCH)/syscallh.inc $(ARCH)/sysnr.inc \
   ostypes.inc osmacro.inc $(UNIXINC)/gensigset.inc \
@@ -245,10 +278,10 @@ baseunix$(PPUEXT) : errno.inc ptypes.inc $(UNIXINC)/ctypes.inc \
 ports$(PPUEXT) : $(UNIXINC)/ports.pp unix$(PPUEXT) objpas$(PPUEXT)
 	$(COMPILER) $(UNIXINC)/ports.pp
 
-dl$(PPUEXT) : $(UNIXINC)/dl.pp $(SYSTEMUNIT)$(PPUEXT)
+dl$(PPUEXT) : $(UNIXINC)/dl.pp $(SYSTEMUNIT)$(PPUEXT) unixtype$(PPUEXT) ctypes$(PPUEXT)
 	$(COMPILER) $(UNIXINC)/dl.pp
 
-dynlibs$(PPUEXT) : $(INC)/dynlibs.pas $(UNIXINC)/dynlibs.inc dl$(PPUEXT) objpas$(PPUEXT)
+dynlibs$(PPUEXT) : $(INC)/dynlibs.pas $(UNIXINC)/dynlibs.inc dl$(PPUEXT) objpas$(PPUEXT) rtlconsts$(PPUEXT) sysutils$(PPUEXT) 
 	$(COMPILER) $(INC)/dynlibs.pas
 
 initc$(PPUEXT) : $(UNIXINC)/initc.pp ctypes$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)
@@ -256,6 +289,15 @@ initc$(PPUEXT) : $(UNIXINC)/initc.pp ctypes$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)
 
 unixcp$(PPUEXT) : $(UNIXINC)/unixcp.pp $(SYSTEMUNIT)$(PPUEXT) objpas$(PPUEXT) baseunix$(PPUEXT)
         $(COMPILER) $(UNIXINC)/unixcp.pp
+		
+linux$(PPUEXT) :  linux.pp baseunix$(PPUEXT) unixtype$(PPUEXT) syscall$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)
+        $(COMPILER) linux.pp
+		
+linuxvcs$(PPUEXT) :  linuxvcs.pp baseunix$(PPUEXT) strings$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)
+        $(COMPILER) linuxvcs.pp
+		
+termio$(PPUEXT) : termio.pp baseunix$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)
+        $(COMPILER) termio.pp
 
 #
 # TP7 Compatible RTL Units
@@ -270,11 +312,12 @@ dos$(PPUEXT) : $(UNIXINC)/dos.pp $(INC)/filerec.inc $(INC)/textrec.inc strings$(
 #
 
 sysutils$(PPUEXT) : $(UNIXINC)/sysutils.pp $(wildcard $(OBJPASDIR)/sysutils/*.inc) \
-                    objpas$(PPUEXT) unix$(PPUEXT) errors$(PPUEXT) sysconst$(PPUEXT)
+                    objpas$(PPUEXT) unix$(PPUEXT) errors$(PPUEXT) sysconst$(PPUEXT) \
+                    linux$(PPUEXT)
         $(COMPILER) -Fi$(OBJPASDIR)/sysutils $(UNIXINC)/sysutils.pp
 
 classes$(PPUEXT) : $(UNIXINC)/classes.pp $(wildcard $(OBJPASDIR)/classes/*.inc) \
-                   sysutils$(PPUEXT) typinfo$(PPUEXT) rtlconsts$(PPUEXT) fgl$(PPUEXT)
+                   sysutils$(PPUEXT) typinfo$(PPUEXT) rtlconsts$(PPUEXT) fgl$(PPUEXT) types$(PPUEXT) unix$(PPUEXT) 
         $(COMPILER) -Fi$(OBJPASDIR)/classes $(UNIXINC)/classes.pp
 
 typinfo$(PPUEXT): $(OBJPASDIR)/typinfo.pp objpas$(PPUEXT) sysutils$(PPUEXT) rtlconsts$(PPUEXT)
@@ -284,7 +327,7 @@ typinfo$(PPUEXT): $(OBJPASDIR)/typinfo.pp objpas$(PPUEXT) sysutils$(PPUEXT) rtlc
 character$(PPUEXT): sysutils$(PPUEXT) $(OBJPASDIR)/character.pas objpas$(PPUEXT) rtlconsts$(PPUEXT) 
         $(COMPILER) $(OBJPASDIR)/character.pas
 
-math$(PPUEXT): $(OBJPASDIR)/math.pp objpas$(PPUEXT) sysutils$(PPUEXT)
+math$(PPUEXT): $(OBJPASDIR)/math.pp objpas$(PPUEXT) sysutils$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)
         $(COMPILER) $(OBJPASDIR)/math.pp
 
 fgl$(PPUEXT) : $(OBJPASDIR)/fgl.pp objpas$(PPUEXT) types$(PPUEXT) system$(PPUEXT) sysutils$(PPUEXT)
@@ -303,7 +346,7 @@ rtlconsts$(PPUEXT) : $(OBJPASDIR)/rtlconsts.pp objpas$(PPUEXT) $(SYSTEMUNIT)$(PP
 # Mac Pascal Model
 #
 
-macpas$(PPUEXT) : $(INC)/macpas.pp objpas$(PPUEXT) math$(PPUEXT)
+macpas$(PPUEXT) : $(INC)/macpas.pp objpas$(PPUEXT) math$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)
         $(COMPILER) $(INC)/macpas.pp $(REDIR)
 
 #
@@ -311,10 +354,10 @@ macpas$(PPUEXT) : $(INC)/macpas.pp objpas$(PPUEXT) math$(PPUEXT)
 #
 
 ifeq ($(ARCH),x86_64)
-cpu$(PPUEXT) : $(PROCINC)/cpu.pp $(SYSTEMUNIT)$(PPUEXT) sysutils$(PPUEXT)
+cpu$(PPUEXT) : $(PROCINC)/cpu.pp $(SYSTEMUNIT)$(PPUEXT) sysutils$(PPUEXT) objpas$(PPUEXT)
 	$(COMPILER) $(PROCINC)/cpu.pp
 else
-cpu$(PPUEXT) : $(PROCINC)/cpu.pp $(SYSTEMUNIT)$(PPUEXT)
+cpu$(PPUEXT) : $(PROCINC)/cpu.pp $(SYSTEMUNIT)$(PPUEXT) objpas$(PPUEXT)
 	$(COMPILER) $(PROCINC)/cpu.pp
 endif
 
@@ -330,13 +373,13 @@ getopts$(PPUEXT) : $(INC)/getopts.pp $(SYSTEMUNIT)$(PPUEXT)
 heaptrc$(PPUEXT) : $(INC)/heaptrc.pp $(SYSTEMUNIT)$(PPUEXT)
         $(COMPILER) -Sg $(INC)/heaptrc.pp
 
-lineinfo$(PPUEXT) : $(INC)/lineinfo.pp $(SYSTEMUNIT)$(PPUEXT)
+lineinfo$(PPUEXT) : $(INC)/lineinfo.pp strings$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)
 	$(COMPILER) $(INC)/lineinfo.pp
 
-lnfodwrf$(PPUEXT) : $(INC)/lnfodwrf.pp $(SYSTEMUNIT)$(PPUEXT)
+lnfodwrf$(PPUEXT) : $(INC)/lnfodwrf.pp $(SYSTEMUNIT)$(PPUEXT) strings$(PPUEXT) $(INC)/exeinfo.pp lineinfo$(PPUEXT)
 	$(COMPILER) $(INC)/lnfodwrf.pp
 
-charset$(PPUEXT) : $(INC)/charset.pp $(SYSTEMUNIT)$(PPUEXT)
+charset$(PPUEXT) : $(INC)/charset.pp $(SYSTEMUNIT)$(PPUEXT) objpas$(PPUEXT)
 	$(COMPILER) $(INC)/charset.pp
 
 cpall$(PPUEXT): $(RTL)/charmaps/cpall.pas system$(PPUEXT) charset$(PPUEXT)
@@ -348,7 +391,7 @@ iso7185$(PPUEXT) : $(INC)/iso7185.pp $(SYSTEMUNIT)$(PPUEXT)
 fpintres$(PPUEXT) : $(INC)/fpintres.pp $(SYSTEMUNIT)$(PPUEXT)
         $(COMPILER) $(INC)/fpintres.pp
 
-fpwidestring$(PPUEXT): $(OBJPASDIR)/fpwidestring.pp character$(PPUEXT) unixcp$(PPUEXT)
+fpwidestring$(PPUEXT): $(OBJPASDIR)/fpwidestring.pp character$(PPUEXT) unixcp$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)
         $(COMPILER) $(OBJPASDIR)/fpwidestring.pp
 #
 # Other $(SYSTEMUNIT)-dependent RTL Units
@@ -363,10 +406,10 @@ callspec$(PPUEXT) : $(INC)/callspec.pp $(SYSTEMUNIT)$(PPUEXT)
 cmem$(PPUEXT) : $(INC)/cmem.pp $(SYSTEMUNIT)$(PPUEXT)
 	$(COMPILER) $(INC)/cmem.pp
 
-cthreads$(PPUEXT) : $(UNIXINC)/cthreads.pp $(SYSTEMUNIT)$(PPUEXT)
+cthreads$(PPUEXT) : $(UNIXINC)/cthreads.pp $(SYSTEMUNIT)$(PPUEXT) unix$(PPUEXT) sysutils$(PPUEXT) baseunix$(PPUEXT) initc$(PPUEXT) dl$(PPUEXT)
 	$(COMPILER) $(UNIXINC)/cthreads.pp
 
-cwstring$(PPUEXT) : $(UNIXINC)/cwstring.pp $(SYSTEMUNIT)$(PPUEXT) sysutils$(PPUEXT) baseunix$(PPUEXT) unix$(PPUEXT) unixtype$(PPUEXT) ctypes$(PPUEXT) dynlibs$(PPUEXT)
+cwstring$(PPUEXT) : $(UNIXINC)/cwstring.pp $(SYSTEMUNIT)$(PPUEXT) sysutils$(PPUEXT) baseunix$(PPUEXT) unix$(PPUEXT) unixtype$(PPUEXT) ctypes$(PPUEXT) dynlibs$(PPUEXT) unixcp$(PPUEXT)
 	$(COMPILER) $(UNIXINC)/cwstring.pp
 
 ctypes$(PPUEXT) :  $(INC)/ctypes.pp unixtype$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)

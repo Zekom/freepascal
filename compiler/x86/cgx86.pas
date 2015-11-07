@@ -32,7 +32,7 @@ unit cgx86;
        cgbase,cgutils,cgobj,
        aasmbase,aasmtai,aasmdata,aasmcpu,
        cpubase,cpuinfo,rgobj,rgx86,rgcpu,
-       symconst,symtype,symdef, cclasses;
+       symconst,symtype,symdef;
 
     type
 
@@ -82,7 +82,7 @@ unit cgx86;
         procedure a_loadaddr_ref_reg(list : TAsmList;const ref : treference;r : tregister);override;
 
         { bit scan instructions }
-        procedure a_bit_scan_reg_reg(list: TAsmList; reverse: boolean; size: TCGSize; src, dst: TRegister); override;
+        procedure a_bit_scan_reg_reg(list: TAsmList; reverse: boolean; srcsize, dstsize: TCGSize; src, dst: TRegister); override;
 
         { fpu move instructions }
         procedure a_loadfpu_reg_reg(list: TAsmList; fromsize, tosize: tcgsize; reg1, reg2: tregister); override;
@@ -125,9 +125,11 @@ unit cgx86;
 
         procedure g_overflowcheck(list: TAsmList; const l:tlocation;def:tdef);override;
 
-        procedure g_external_wrapper(list: TAsmList; procdef: tprocdef; const externalname: string); override;
-
         procedure make_simple_ref(list:TAsmList;var ref: treference);
+
+        function get_darwin_call_stub(const s: string; weak: boolean): tasmsymbol;
+
+        procedure generate_leave(list : TAsmList);
       protected
         procedure a_jmp_cond(list : TAsmList;cond : TOpCmp;l: tasmlabel);
         procedure check_register_size(size:tcgsize;reg:tregister);
@@ -135,7 +137,6 @@ unit cgx86;
         procedure opmm_loc_reg(list: TAsmList; Op: TOpCG; size : tcgsize;loc : tlocation;dst: tregister; shuffle : pmmshuffle);
         procedure opmm_loc_reg_reg(list : TAsmList;Op : TOpCG;size : tcgsize;loc : tlocation;src,dst : tregister;shuffle : pmmshuffle);
 
-        function get_darwin_call_stub(const s: string; weak: boolean): tasmsymbol;
         procedure sizes2load(s1,s2 : tcgsize;var op: tasmop; var s3: topsize);
 
         procedure floatload(list: TAsmList; t : tcgsize;const ref : treference);
@@ -175,13 +176,16 @@ unit cgx86;
 
     function UseIncDec: boolean;
 
+    { returns true, if the compiler should use leave instead of mov/pop }
+    function UseLeave: boolean;
+
   implementation
 
     uses
        globals,verbose,systems,cutils,
        defutil,paramgr,procinfo,
        tgobj,ncgutil,
-       fmodule,symsym;
+       fmodule,symsym,symcpu;
 
     function UseAVX: boolean;
       begin
@@ -202,6 +206,18 @@ unit cgx86;
 {$endif}
       end;
 
+
+    function UseLeave: boolean;
+      begin
+{$if defined(x86_64)}
+        { Modern processors should be happy with mov;pop, maybe except older AMDs }
+        Result:=cs_opt_size in current_settings.optimizerswitches;
+{$elseif defined(i386)}
+        Result:=(cs_opt_size in current_settings.optimizerswitches) or (current_settings.optimizecputype<cpu_Pentium2);
+{$elseif defined(i8086)}
+        Result:=current_settings.cputype>=cpu_186;
+{$endif}
+      end;
 
     const
       TOpCG2AsmOp: Array[topcg] of TAsmOp = (A_NONE,A_MOV,A_ADD,A_AND,A_DIV,
@@ -507,7 +523,7 @@ unit cgx86;
               end
             else
               { Always use RIP relative symbol addressing for Windows and Darwin targets. }
-              if (target_info.system in (systems_all_windows+[system_x86_64_darwin])) and (ref.base<>NR_RIP) then
+              if (target_info.system in (systems_all_windows+[system_x86_64_darwin,system_x86_64_iphonesim])) and (ref.base<>NR_RIP) then
                 begin
                   if (ref.refaddr=addr_no) and (ref.base=NR_NO) and (ref.index=NR_NO) then
                     begin
@@ -810,7 +826,7 @@ unit cgx86;
             reference_reset_symbol(r,sym,0,sizeof(pint));
             if (cs_create_pic in current_settings.moduleswitches) and
                { darwin's assembler doesn't want @PLT after call symbols }
-               not(target_info.system in [system_x86_64_darwin,system_i386_iphonesim]) then
+               not(target_info.system in [system_x86_64_darwin,system_i386_iphonesim,system_x86_64_iphonesim]) then
               begin
 {$ifdef i386}
                 include(current_procinfo.flags,pi_needs_got);
@@ -1048,7 +1064,7 @@ unit cgx86;
                           a_op_const_reg(list,OP_ADD,OS_ADDR,offset,r);
                       end
 {$ifdef x86_64}
-                    else if (target_info.system in (systems_all_windows+[system_x86_64_darwin]))
+                    else if (target_info.system in (systems_all_windows+[system_x86_64_darwin,system_x86_64_iphonesim]))
 			 or (cs_create_pic in current_settings.moduleswitches)
 			 then
                       begin
@@ -1687,12 +1703,8 @@ unit cgx86;
 
 
     procedure tcgx86.a_op_const_reg(list : TAsmList; Op: TOpCG; size: TCGSize; a: tcgint; reg: TRegister);
-
-      var
-        opcode : tasmop;
-        power  : longint;
-        href : treference;
 {$ifdef x86_64}
+      var
         tmpreg : tregister;
 {$endif x86_64}
       begin
@@ -1796,8 +1808,6 @@ unit cgx86;
 
     procedure tcgx86.a_op_const_ref(list : TAsmList; Op: TOpCG; size: TCGSize; a: tcgint; const ref: TReference);
       var
-        opcode: tasmop;
-        power: longint;
 {$ifdef x86_64}
         tmpreg : tregister;
 {$endif x86_64}
@@ -2012,20 +2022,36 @@ unit cgx86;
         end;
       end;
 
-     procedure tcgx86.a_bit_scan_reg_reg(list: TAsmList; reverse: boolean; size: TCGSize; src, dst: TRegister);
+     procedure tcgx86.a_bit_scan_reg_reg(list: TAsmList; reverse: boolean; srcsize, dstsize: TCGSize; src, dst: TRegister);
      var
+       tmpreg: tregister;
        opsize: topsize;
        l : TAsmLabel;
      begin
-       opsize:=tcgsize2opsize[size];
-       if not reverse then
-         list.concat(taicpu.op_reg_reg(A_BSF,opsize,src,dst))
+       { no bsf/bsr for byte }
+       if srcsize in [OS_8,OS_S8] then
+         begin
+           tmpreg:=getintregister(list,OS_INT);
+           a_load_reg_reg(list,srcsize,OS_INT,src,tmpreg);
+           src:=tmpreg;
+           srcsize:=OS_INT;
+         end;
+       { source and destination register must have the same size }
+       if tcgsize2size[srcsize]<>tcgsize2size[dstsize] then
+         tmpreg:=getintregister(list,srcsize)
        else
-         list.concat(taicpu.op_reg_reg(A_BSR,opsize,src,dst));
+         tmpreg:=dst;
+       opsize:=tcgsize2opsize[srcsize];
+       if not reverse then
+         list.concat(taicpu.op_reg_reg(A_BSF,opsize,src,tmpreg))
+       else
+         list.concat(taicpu.op_reg_reg(A_BSR,opsize,src,tmpreg));
        current_asmdata.getjumplabel(l);
        a_jmp_cond(list,OC_NE,l);
-       list.concat(taicpu.op_const_reg(A_MOV,opsize,$ff,dst));
+       list.concat(taicpu.op_const_reg(A_MOV,opsize,$ff,tmpreg));
        a_label(list,l);
+       if tmpreg<>dst then
+         a_load_reg_reg(list,srcsize,dstsize,tmpreg,dst);
      end;
 
 {*************** compare instructructions ****************}
@@ -2266,7 +2292,8 @@ unit cgx86;
         REGCX=NR_CX;
         REGSI=NR_SI;
         REGDI=NR_DI;
-        copy_len_sizes = [1, 2];
+        copy_len_sizes = [1, 2, 4]; { 4 is included here, because it's still more
+          efficient to use copy_move instead of copy_string for copying 4 bytes }
         push_segment_size = S_W;
 {$endif}
 
@@ -2689,7 +2716,8 @@ unit cgx86;
                a_call_name(list,'MCOUNT',false);
              end;
            system_x86_64_linux,
-           system_x86_64_darwin:
+           system_x86_64_darwin,
+           system_x86_64_iphonesim:
              begin
                a_call_name(list,'mcount',false);
              end;
@@ -2813,6 +2841,7 @@ unit cgx86;
         regsize: longint;
 {$ifdef i8086}
         dgroup: treference;
+        fardataseg: treference;
 {$endif i8086}
 
       procedure push_regs;
@@ -2830,8 +2859,61 @@ unit cgx86;
 
       begin
 {$ifdef i8086}
+        { Win16 callback/exported proc prologue support.
+          Since callbacks can be called from different modules, DS on entry may be
+          initialized with the data segment of a different module, so we need to
+          get ours. But we can't do
+
+                      push ds
+                      mov ax, dgroup
+                      mov ds, ax
+
+          because code segments are shared between different instances of the same
+          module (which have different instances of the current program's data segment),
+          so the same 'mov ax, dgroup' instruction will be used for all instances
+          of the program and it will load the same segment into ax.
+
+          So, the standard win16 prologue looks like this:
+
+                      mov ax, ds
+                      nop
+                      inc bp
+                      push bp
+                      mov bp, sp
+                      push ds
+                      mov ds, ax
+
+          By default, this does nothing, except wasting a few extra machine cycles and
+          destroying ax in the process. However, Windows checks the first three bytes
+          of every exported function and if they are 'mov ax,ds/nop', they are replaced
+          with nop/nop/nop. Then the MakeProcInstance api call should be used to create
+          a thunk that loads ds for the current program instance in ax before calling
+          the routine.
+
+          And now the fun part comes: somebody (Michael Geary) figured out that all this
+          crap was unnecessary, because in Win16 exe modules, we always have DS=SS, so we
+          can simply initialize DS from SS :) And then calling MakeProcInstance becomes
+          unnecessary. This is what "smart callbacks" (cs_win16_smartcallbacks) do. However,
+          this only works for exe files, not for dlls, because dlls run with DS<>SS. There's
+          another solution for dlls - since win16 dlls only have a single instance of their
+          data segment, we can initialize ds from dgroup. However, there's not a single
+          solution for both exe and dlls, so we don't know what to use e.g. in a unit. So,
+          that's why there's still an option to turn smart callbacks off and go the
+          MakeProcInstance way.
+
+          Additional details here: http://www.geary.com/fixds.html }
+        if (current_settings.x86memorymodel<>mm_huge) and
+           (po_exports in current_procinfo.procdef.procoptions) and
+           (target_info.system=system_i8086_win16) then
+          begin
+            if cs_win16_smartcallbacks in current_settings.moduleswitches then
+              list.concat(Taicpu.Op_reg_reg(A_MOV,S_W,NR_SS,NR_AX))
+            else
+              list.concat(Taicpu.Op_reg_reg(A_MOV,S_W,NR_DS,NR_AX));
+            list.concat(Taicpu.op_none(A_NOP));
+          end
         { interrupt support for i8086 }
-        if po_interrupt in current_procinfo.procdef.procoptions then
+        else if po_interrupt in current_procinfo.procdef.procoptions then
           begin
             list.concat(Taicpu.Op_reg(A_PUSH,S_W,NR_AX));
             list.concat(Taicpu.Op_reg(A_PUSH,S_W,NR_BX));
@@ -2857,6 +2939,13 @@ unit cgx86;
                     list.concat(Taicpu.Op_reg_reg(A_MOV,S_W,NR_CS,NR_AX));
                     list.concat(Taicpu.Op_reg_reg(A_MOV,S_W,NR_AX,NR_DS));
                   end;
+              end
+            else if current_settings.x86memorymodel=mm_huge then
+              begin
+                reference_reset(fardataseg,0);
+                fardataseg.refaddr:=addr_fardataseg;
+                list.concat(Taicpu.Op_ref_reg(A_MOV,S_W,fardataseg,NR_AX));
+                list.concat(Taicpu.Op_reg_reg(A_MOV,S_W,NR_AX,NR_DS));
               end
             else
               begin
@@ -2904,6 +2993,13 @@ unit cgx86;
               end
             else
               begin
+{$ifdef i8086}
+                if ((ts_x86_far_procs_push_odd_bp in current_settings.targetswitches) or
+                    ((po_exports in current_procinfo.procdef.procoptions) and
+                     (target_info.system=system_i8086_win16))) and
+                    is_proc_far(current_procinfo.procdef) then
+                  cg.a_op_const_reg(list,OP_ADD,OS_ADDR,1,current_procinfo.framepointer);
+{$endif i8086}
                 { push <frame_pointer> }
                 inc(stackmisalignment,sizeof(pint));
                 include(rg[R_INTREGISTER].preserved_by_proc,RS_FRAME_POINTER_REG);
@@ -2940,6 +3036,36 @@ unit cgx86;
                   current_asmdata.asmcfi.cfa_def_cfa_offset(list,localsize+sizeof(pint));
                 current_procinfo.final_localsize:=localsize;
               end;
+
+{$ifdef i8086}
+              { win16 exported proc prologue follow-up (see the huge comment above for details) }
+              if (current_settings.x86memorymodel<>mm_huge) and
+                 (po_exports in current_procinfo.procdef.procoptions) and
+                 (target_info.system=system_i8086_win16) then
+                begin
+                  list.concat(Taicpu.op_reg(A_PUSH,S_W,NR_DS));
+                  list.concat(Taicpu.Op_reg_reg(A_MOV,S_W,NR_AX,NR_DS));
+                end
+              else if (current_settings.x86memorymodel=mm_huge) and
+                      not (po_interrupt in current_procinfo.procdef.procoptions) then
+                begin
+                  list.concat(Taicpu.op_reg(A_PUSH,S_W,NR_DS));
+                  reference_reset(fardataseg,0);
+                  fardataseg.refaddr:=addr_fardataseg;
+                  list.concat(Taicpu.Op_ref_reg(A_MOV,S_W,fardataseg,NR_AX));
+                  list.concat(Taicpu.Op_reg_reg(A_MOV,S_W,NR_AX,NR_DS));
+                end;
+            { SI and DI are volatile in the BP7 and FPC's pascal calling convention,
+              but must be preserved in Microsoft C's pascal calling convention, and
+              since Windows is compiled with Microsoft compilers, these registers
+              must be saved for exported procedures (BP7 for Win16 also does this). }
+            if (po_exports in current_procinfo.procdef.procoptions) and
+               (target_info.system=system_i8086_win16) then
+              begin
+                list.concat(Taicpu.Op_reg(A_PUSH,S_W,NR_SI));
+                list.concat(Taicpu.Op_reg(A_PUSH,S_W,NR_DI));
+              end;
+{$endif i8086}
 
 {$ifdef i386}
             if (not paramanager.use_fixed_stack) and
@@ -2999,6 +3125,26 @@ unit cgx86;
       end;
 
 
+    procedure tcgx86.generate_leave(list: TAsmList);
+      begin
+        if UseLeave then
+          list.concat(taicpu.op_none(A_LEAVE,S_NO))
+        else
+          begin
+{$if defined(x86_64)}
+            list.Concat(taicpu.op_reg_reg(A_MOV,S_Q,NR_RBP,NR_RSP));
+            list.Concat(taicpu.op_reg(A_POP,S_Q,NR_RBP));
+{$elseif defined(i386)}
+            list.Concat(taicpu.op_reg_reg(A_MOV,S_L,NR_EBP,NR_ESP));
+            list.Concat(taicpu.op_reg(A_POP,S_L,NR_EBP));
+{$elseif defined(i8086)}
+            list.Concat(taicpu.op_reg_reg(A_MOV,S_W,NR_BP,NR_SP));
+            list.Concat(taicpu.op_reg(A_POP,S_W,NR_BP));
+{$endif}
+          end;
+      end;
+
+
     { produces if necessary overflowcode }
     procedure tcgx86.g_overflowcheck(list: TAsmList; const l:tlocation;def:tdef);
       var
@@ -3023,31 +3169,6 @@ unit cgx86;
 
          a_call_name(list,'FPC_OVERFLOW',false);
          a_label(list,hl);
-      end;
-
-    procedure tcgx86.g_external_wrapper(list: TAsmList; procdef: tprocdef; const externalname: string);
-      var
-        ref : treference;
-        sym : tasmsymbol;
-      begin
-       if (target_info.system = system_i386_darwin) then
-         begin
-           { a_jmp_name jumps to a stub which is always pic-safe on darwin }
-           inherited g_external_wrapper(list,procdef,externalname);
-           exit;
-         end;
-
-        sym:=current_asmdata.RefAsmSymbol(externalname);
-        reference_reset_symbol(ref,sym,0,sizeof(pint));
-
-        { create pic'ed? }
-        if (cs_create_pic in current_settings.moduleswitches) and
-           { darwin/x86_64's assembler doesn't want @PLT after call symbols }
-           not(target_info.system in [system_x86_64_darwin,system_i386_iphonesim]) then
-          ref.refaddr:=addr_pic
-        else
-          ref.refaddr:=addr_full;
-        list.concat(taicpu.op_ref(A_JMP,S_NO,ref));
       end;
 
 end.

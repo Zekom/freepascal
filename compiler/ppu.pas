@@ -43,7 +43,7 @@ type
 {$endif Test_Double_checksum}
 
 const
-  CurrentPPUVersion = 170;
+  CurrentPPUVersion = 179;
 
 { buffer sizes }
   maxentrysize = 1024;
@@ -188,7 +188,8 @@ const
     { 12 } 16 {'avr'},
     { 13 } 32 {'mipsel'},
     { 14 } 32 {'jvm'},
-    { 15 } 16 {'i8086'}
+    { 15 } 16 {'i8086'},
+    { 16 } 64 {'aarch64'}
     );
   CpuAluBitSize : array[tsystemcpu] of longint =
     (
@@ -207,7 +208,8 @@ const
     { 12 }  8 {'avr'},
     { 13 } 32 {'mipsel'},
     { 14 } 64 {'jvm'},
-    { 15 } 16 {'i8086'}
+    { 15 } 16 {'i8086'},
+    { 16 } 64 {'aarch64'}
     );
 {$endif generic_cpu}
 
@@ -313,9 +315,9 @@ type
     function  getlongint:longint;
     function getint64:int64;
     function  getqword:qword;
-    function getaint:aint;
-    function getasizeint:asizeint;
-    function getaword:aword;
+    function getaint:{$ifdef generic_cpu}int64{$else}aint{$endif};
+    function getasizeint:{$ifdef generic_cpu}int64{$else}asizeint{$endif};
+    function getaword:{$ifdef generic_cpu}qword{$else}aword{$endif};
     function  getreal:ppureal;
     function  getrealsize(sizeofreal : longint):ppureal;
     function  getstring:string;
@@ -777,7 +779,7 @@ begin
 end;
 
 
-function tppufile.getaint:aint;
+function tppufile.getaint:{$ifdef generic_cpu}int64{$else}aint{$endif};
 begin
 {$ifdef generic_cpu}
   if CpuAluBitSize[tsystemcpu(header.cpu)]=64 then
@@ -805,7 +807,7 @@ begin
 end;
 
 
-function tppufile.getasizeint:asizeint;
+function tppufile.getasizeint:{$ifdef generic_cpu}int64{$else}asizeint{$endif};
 begin
 {$ifdef generic_cpu}
   if CpuAddrBitSize[tsystemcpu(header.cpu)]=64 then
@@ -831,7 +833,7 @@ begin
 end;
 
 
-function tppufile.getaword:aword;
+function tppufile.getaword:{$ifdef generic_cpu}qword{$else}aword{$endif};
 begin
 {$ifdef generic_cpu}
   if CpuAluBitSize[tsystemcpu(header.cpu)]=64 then

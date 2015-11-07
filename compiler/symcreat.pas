@@ -114,13 +114,18 @@ interface
     created staticvarsym that is responsible for allocating the global storage }
   function make_field_static(recst: tsymtable; fieldvs: tfieldvarsym): tstaticvarsym;
 
+  { create a new procdef with the signature of orgpd and (mangled) name
+    newname, and change the implementation of orgpd so that it calls through
+    to this new procedure }
+  procedure call_through_new_name(orgpd: tprocdef; const newname: TSymStr);
+
 
 implementation
 
   uses
     cutils,cclasses,globals,verbose,systems,comphook,fmodule,
     symtable,defutil,
-    pbase,pdecobj,pdecsub,psub,ptconst,
+    pbase,pdecobj,pdecsub,psub,ptconst,pparautl,
 {$ifdef jvm}
     pjvm,jvmdef,
 {$endif jvm}
@@ -817,7 +822,7 @@ implementation
       callpd: tprocdef;
     begin
       callpd:=tprocdef(pd.skpara);
-      str:='var pv: __fpc_virtualclassmethod_pv_t'+tostr(pd.defid)+'; begin '
+      str:='var pv: __fpc_virtualclassmethod_pv_t'+pd.unique_id_str+'; begin '
         + 'pv:=@'+callpd.procsym.RealName+';';
       if (pd.proctypeoption<>potype_constructor) and
          not is_void(pd.returndef) then
@@ -916,6 +921,46 @@ implementation
     end;
 
 
+  procedure implement_block_invoke_procvar(pd: tprocdef);
+    var
+      str: ansistring;
+    begin
+      str:='';
+      str:='begin ';
+      if pd.returndef<>voidtype then
+        str:=str+'result:=';
+      str:=str+'__FPC_BLOCK_INVOKE_PV_TYPE(PFPC_Block_literal_complex_procvar(FPC_Block_Self)^.pv)(';
+      addvisibibleparameters(str,pd);
+      str:=str+') end;';
+      str_parse_method_impl(str,pd,false);
+    end;
+
+
+  procedure implement_interface_wrapper(pd: tprocdef);
+    var
+      wrapperinfo: pskpara_interface_wrapper;
+      callthroughpd: tprocdef;
+      str: ansistring;
+    begin
+      wrapperinfo:=pskpara_interface_wrapper(pd.skpara);
+      if not assigned(wrapperinfo) then
+        internalerror(2015090801);
+      callthroughpd:=tprocdef(wrapperinfo^.pd);
+      str:='begin ';
+      { self right now points to the VMT of interface inside the instance ->
+        adjust so it points to the start of the instance }
+      str:=str+'pointer(self):=pointer(self) - '+tostr(wrapperinfo^.offset)+';';
+      { now call through to the actual method }
+      if pd.returndef<>voidtype then
+        str:=str+'result:=';
+      str:=str+callthroughpd.procsym.realname+'(';
+      addvisibibleparameters(str,callthroughpd);
+      str:=str+') end;';
+      str_parse_method_impl(str,pd,false);
+      dispose(wrapperinfo);
+      pd.skpara:=nil;
+    end;
+
   procedure add_synthetic_method_implementations_for_st(st: tsymtable);
     var
       i   : longint;
@@ -986,6 +1031,10 @@ implementation
               implement_field_getter(pd);
             tsk_field_setter:
               implement_field_setter(pd);
+            tsk_block_invoke_procvar:
+              implement_block_invoke_procvar(pd);
+            tsk_interface_wrapper:
+              implement_interface_wrapper(pd);
             else
               internalerror(2011032801);
           end;
@@ -999,9 +1048,6 @@ implementation
       def: tdef;
       sstate: tscannerstate;
     begin
-      { only necessary for the JVM target currently }
-      if not (target_info.system in systems_jvm) then
-        exit;
       { skip if any errors have occurred, since then this can only cause more
         errors }
       if ErrorCount<>0 then
@@ -1105,7 +1151,8 @@ implementation
       { create struct to hold local variables and parameters that are
         accessed from within nested routines (start with extra dollar to prevent
         the JVM from thinking this is a nested class in the unit) }
-      nestedvarsst:=trecordsymtable.create('$'+current_module.realmodulename^+'$$_fpc_nestedvars$'+tostr(pd.defid),current_settings.alignment.localalignmax);
+      nestedvarsst:=trecordsymtable.create('$'+current_module.realmodulename^+'$$_fpc_nestedvars$'+pd.unique_id_str,
+        current_settings.alignment.localalignmax,current_settings.alignment.localalignmin,current_settings.alignment.maxCrecordalign);
       nestedvarsdef:=crecorddef.create(nestedvarsst.name^,nestedvarsst);
 {$ifdef jvm}
       maybe_guarantee_record_typesym(nestedvarsdef,nestedvarsdef.owner);
@@ -1118,7 +1165,7 @@ implementation
 {$endif}
       symtablestack.free;
       symtablestack:=old_symtablestack.getcopyuntil(pd.localst);
-      pnestedvarsdef:=getpointerdef(nestedvarsdef);
+      pnestedvarsdef:=cpointerdef.getreusable(nestedvarsdef);
       nestedvars:=clocalvarsym.create('$nestedvars',vs_var,nestedvarsdef,[]);
       pd.localst.insert(nestedvars);
       pd.parentfpstruct:=nestedvars;
@@ -1149,7 +1196,7 @@ implementation
           nestedvarsst:=trecorddef(nestedvarsdef).symtable;
           { indicate whether or not this is a var/out/constref/... parameter }
           if addrparam then
-            fieldvardef:=getpointerdef(vardef)
+            fieldvardef:=cpointerdef.getreusable(vardef)
           else
             fieldvardef:=vardef;
           result:=cfieldvarsym.create(sym.realname,vs_value,fieldvardef,[]);
@@ -1251,7 +1298,7 @@ implementation
          (def.typ=recorddef) and
          not assigned(def.typesym) then
         begin
-          ts:=ctypesym.create(trecorddef(def).symtable.realname^,def);
+          ts:=ctypesym.create(trecorddef(def).symtable.realname^,def,true);
           st.insert(ts);
           ts.visibility:=vis_strictprivate;
           { this typesym can't be used by any Pascal code, so make sure we don't
@@ -1308,6 +1355,40 @@ implementation
       tmp:=cabsolutevarsym.create_ref('$'+static_name,fieldvs.vardef,sl);
       recst.insert(tmp);
       result:=hstaticvs;
+    end;
+
+
+  procedure call_through_new_name(orgpd: tprocdef; const newname: TSymStr);
+    var
+      newpd: tprocdef;
+    begin
+      { we have a forward declaration like
+         procedure test; (in the unit interface or "forward")
+        and then an implementation like
+         procedure test; external name 'something';
+
+        To solve this, we create a new external procdef for the
+        implementation, and then generate a procedure body for the original
+        one that calls through to the external procdef. This is necessary
+        because there may already be references to the mangled name for the
+        non-external "test".
+      }
+      newpd:=tprocdef(orgpd.getcopyas(procdef,pc_bareproc));
+      insert_funcret_para(newpd);
+      newpd.procoptions:=newpd.procoptions+orgpd.procoptions*[po_external,po_has_importname,po_has_importdll];
+      newpd.import_name:=orgpd.import_name;
+      orgpd.import_name:=nil;
+      newpd.import_dll:=orgpd.import_dll;
+      newpd.import_dll:=nil;
+      newpd.import_nr:=orgpd.import_nr;
+      orgpd.import_nr:=0;
+      newpd.setmangledname(newname);
+      finish_copied_procdef(newpd,'__FPC_IMPL_EXTERNAL_REDIRECT_'+newname,current_module.localsymtable,nil);
+      newpd.forwarddef:=false;
+      orgpd.skpara:=newpd;
+      orgpd.synthetickind:=tsk_callthrough;
+      orgpd.procoptions:=orgpd.procoptions-[po_external,po_has_importname,po_has_importdll];
+      orgpd.forwarddef:=true;
     end;
 
 end.

@@ -104,7 +104,7 @@ implementation
         result:=nil;
         consume(_CONSTRUCTOR);
         { must be at same level as in implementation }
-        parse_proc_head(current_structdef,potype_class_constructor,pd);
+        parse_proc_head(current_structdef,potype_class_constructor,false,nil,nil,pd);
         if not assigned(pd) then
           begin
             consume(_SEMICOLON);
@@ -129,7 +129,7 @@ implementation
         result:=nil;
         consume(_CONSTRUCTOR);
         { must be at same level as in implementation }
-        parse_proc_head(current_structdef,potype_constructor,pd);
+        parse_proc_head(current_structdef,potype_constructor,false,nil,nil,pd);
         if not assigned(pd) then
           begin
             consume(_SEMICOLON);
@@ -226,7 +226,7 @@ implementation
       begin
         result:=nil;
         consume(_DESTRUCTOR);
-        parse_proc_head(current_structdef,potype_class_destructor,pd);
+        parse_proc_head(current_structdef,potype_class_destructor,false,nil,nil,pd);
         if not assigned(pd) then
           begin
             consume(_SEMICOLON);
@@ -250,7 +250,7 @@ implementation
       begin
         result:=nil;
         consume(_DESTRUCTOR);
-        parse_proc_head(current_structdef,potype_destructor,pd);
+        parse_proc_head(current_structdef,potype_destructor,false,nil,nil,pd);
         if not assigned(pd) then
           begin
             consume(_SEMICOLON);
@@ -679,9 +679,6 @@ implementation
               Message1(sym_e_formal_class_not_resolved,childof.objrealname^);
           end;
 
-        { remove forward flag, is resolved }
-        exclude(current_structdef.objectoptions,oo_is_forward);
-
         if hasparentdefined then
           begin
             if current_objectdef.objecttype in [odt_class,odt_objcclass,odt_objcprotocol,odt_javaclass,odt_interfacejava] then
@@ -695,6 +692,9 @@ implementation
               end;
             consume(_RKLAMMER);
           end;
+
+        { remove forward flag, is resolved }
+        exclude(current_structdef.objectoptions,oo_is_forward);
       end;
 
     procedure parse_extended_type(helpertype:thelpertype);
@@ -1216,7 +1216,10 @@ implementation
                           begin
                             if is_interface(current_structdef) or
                                is_objc_protocol_or_category(current_structdef) or
-                               is_objectpascal_helper(current_structdef) or
+                               (
+                                 is_objectpascal_helper(current_structdef) and
+                                 not class_fields
+                               ) or
                                (is_javainterface(current_structdef) and
                                 not(class_fields and final_fields)) then
                               Message(parser_e_no_vars_in_interfaces);
@@ -1298,8 +1301,6 @@ implementation
         old_current_structdef: tabstractrecorddef;
         old_current_genericdef,
         old_current_specializedef: tstoreddef;
-        hrecst: trecordsymtable;
-        fsym: tfieldvarsym;
         old_parse_generic: boolean;
         list: TFPObjectList;
         s: String;
@@ -1327,7 +1328,7 @@ implementation
               begin
                 Message(parser_e_forward_mismatch);
                 { recover }
-                current_structdef:=cobjectdef.create(current_objectdef.objecttype,n,nil);
+                current_structdef:=cobjectdef.create(current_objectdef.objecttype,n,nil,true);
                 include(current_structdef.objectoptions,oo_is_forward);
               end
             else
@@ -1340,7 +1341,7 @@ implementation
               Message(parser_f_no_anonym_objects);
 
             { create new class }
-            current_structdef:=cobjectdef.create(objecttype,n,nil);
+            current_structdef:=cobjectdef.create(objecttype,n,nil,true);
 
             { include always the forward flag, it'll be removed after the parent class have been
               added. This is to prevent circular childof loops }
@@ -1531,6 +1532,7 @@ implementation
         { generate vmt space if needed }
         if not(oo_has_vmt in current_structdef.objectoptions) and
            not(oo_is_forward in current_structdef.objectoptions) and
+           not(parse_generic) and
            { no vmt for helpers ever }
            not is_objectpascal_helper(current_structdef) and
            (

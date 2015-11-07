@@ -36,7 +36,8 @@ implementation
        cutils,cfileutl,cclasses,
        globtype,globals,systems,verbose,script,
        fmodule,i_msdos,
-       link,aasmbase,cpuinfo;
+       link,aasmbase,cpuinfo,
+       omfbase,ogbase,ogomf,owomflib;
 
     type
       { Borland TLINK support }
@@ -68,6 +69,20 @@ implementation
          constructor Create;override;
          procedure SetDefaultInfo;override;
          function  MakeExecutable:boolean;override;
+      end;
+
+      { TInternalLinkerMsDos }
+
+      TInternalLinkerMsDos=class(tinternallinker)
+      private
+        function GetTotalSizeForSegmentClass(aExeOutput: TExeOutput; const SegClass: string): QWord;
+      protected
+        function GetCodeSize(aExeOutput: TExeOutput): QWord;override;
+        function GetDataSize(aExeOutput: TExeOutput): QWord;override;
+        function GetBssSize(aExeOutput: TExeOutput): QWord;override;
+        procedure DefaultLinkScript;override;
+      public
+        constructor create;override;
       end;
 
 
@@ -250,7 +265,7 @@ begin
 
   LinkRes.Add('option quiet');
 
-  if paratargetdbg in [dbg_dwarf2,dbg_dwarf3,dbg_dwarf4] then
+  if target_dbg.id in [dbg_dwarf2,dbg_dwarf3,dbg_dwarf4] then
     LinkRes.Add('debug dwarf');
 
   { add objectfiles, start with prt0 always }
@@ -281,7 +296,7 @@ begin
   if current_settings.x86memorymodel=mm_tiny then
     LinkRes.Add('order clname CODE clname DATA clname BSS')
   else
-    LinkRes.Add('order clname CODE clname BEGDATA segment _NULL segment _AFTERNULL clname DATA clname BSS clname STACK clname HEAP');
+    LinkRes.Add('order clname CODE clname FAR_DATA clname BEGDATA segment _NULL segment _AFTERNULL clname DATA clname BSS clname STACK clname HEAP');
   if (cs_link_map in current_settings.globalswitches) then
     LinkRes.Add('option map='+maybequoted(ChangeFileExt(current_module.exefilename,'.map')));
   LinkRes.Add('name ' + maybequoted(current_module.exefilename));
@@ -380,11 +395,113 @@ begin
     Result:=true;
 end;
 
+{****************************************************************************
+                               TInternalLinkerMsDos
+****************************************************************************}
+
+function TInternalLinkerMsDos.GetTotalSizeForSegmentClass(
+  aExeOutput: TExeOutput; const SegClass: string): QWord;
+var
+  objseclist: TFPObjectList;
+  objsec: TOmfObjSection;
+  i: Integer;
+begin
+  Result:=0;
+  objseclist:=TMZExeOutput(aExeOutput).MZFlatContentSection.ObjSectionList;
+  for i:=0 to objseclist.Count-1 do
+    begin
+      objsec:=TOmfObjSection(objseclist[i]);
+      if objsec.ClassName=SegClass then
+        Inc(Result,objsec.Size);
+    end;
+end;
+
+function TInternalLinkerMsDos.GetCodeSize(aExeOutput: TExeOutput): QWord;
+begin
+  Result:=GetTotalSizeForSegmentClass(aExeOutput,'CODE');
+end;
+
+function TInternalLinkerMsDos.GetDataSize(aExeOutput: TExeOutput): QWord;
+begin
+  Result:=GetTotalSizeForSegmentClass(aExeOutput,'DATA');
+end;
+
+function TInternalLinkerMsDos.GetBssSize(aExeOutput: TExeOutput): QWord;
+begin
+  Result:=GetTotalSizeForSegmentClass(aExeOutput,'BSS');
+end;
+
+procedure TInternalLinkerMsDos.DefaultLinkScript;
+var
+  s: TCmdStr;
+begin
+  { add objectfiles, start with prt0 always }
+  case current_settings.x86memorymodel of
+    mm_tiny:    LinkScript.Concat('READOBJECT ' + maybequoted(FindObjectFile('prt0t','',false)));
+    mm_small:   LinkScript.Concat('READOBJECT ' + maybequoted(FindObjectFile('prt0s','',false)));
+    mm_medium:  LinkScript.Concat('READOBJECT ' + maybequoted(FindObjectFile('prt0m','',false)));
+    mm_compact: LinkScript.Concat('READOBJECT ' + maybequoted(FindObjectFile('prt0c','',false)));
+    mm_large:   LinkScript.Concat('READOBJECT ' + maybequoted(FindObjectFile('prt0l','',false)));
+    mm_huge:    LinkScript.Concat('READOBJECT ' + maybequoted(FindObjectFile('prt0h','',false)));
+  end;
+  while not ObjectFiles.Empty do
+  begin
+    s:=ObjectFiles.GetFirst;
+    if s<>'' then
+      LinkScript.Concat('READOBJECT ' + maybequoted(s));
+  end;
+  LinkScript.Concat('GROUP');
+  while not StaticLibFiles.Empty do
+  begin
+    s:=StaticLibFiles.GetFirst;
+    if s<>'' then
+      LinkScript.Concat('READSTATICLIBRARY '+MaybeQuoted(s));
+  end;
+  LinkScript.Concat('ENDGROUP');
+
+  LinkScript.Concat('EXESECTION .MZ_flat_content');
+  if current_settings.x86memorymodel=mm_tiny then
+    begin
+      LinkScript.Concat('  OBJSECTION *||CODE');
+      LinkScript.Concat('  OBJSECTION *||DATA');
+      LinkScript.Concat('  SYMBOL _edata');
+      LinkScript.Concat('  OBJSECTION *||BSS');
+      LinkScript.Concat('  SYMBOL _end');
+    end
+  else
+    begin
+      LinkScript.Concat('  OBJSECTION _TEXT||CODE');
+      LinkScript.Concat('  OBJSECTION *||CODE');
+      LinkScript.Concat('  OBJSECTION *||FAR_DATA');
+      LinkScript.Concat('  OBJSECTION _NULL||BEGDATA');
+      LinkScript.Concat('  OBJSECTION _AFTERNULL||BEGDATA');
+      LinkScript.Concat('  OBJSECTION *||BEGDATA');
+      LinkScript.Concat('  OBJSECTION *||DATA');
+      LinkScript.Concat('  SYMBOL _edata');
+      LinkScript.Concat('  OBJSECTION *||BSS');
+      LinkScript.Concat('  SYMBOL _end');
+      LinkScript.Concat('  OBJSECTION *||STACK');
+      LinkScript.Concat('  OBJSECTION *||HEAP');
+    end;
+  LinkScript.Concat('ENDEXESECTION');
+
+  LinkScript.Concat('ENTRYNAME ..start');
+end;
+
+constructor TInternalLinkerMsDos.create;
+begin
+  inherited create;
+  CArObjectReader:=TOmfLibObjectReader;
+  CExeOutput:=TMZExeOutput;
+  CObjInput:=TOmfObjInput;
+end;
+
 {*****************************************************************************
                                      Initialize
 *****************************************************************************}
 
 initialization
+  RegisterLinker(ld_int_msdos,TInternalLinkerMsDos);
 {$if defined(USE_LINKER_TLINK)}
   RegisterLinker(ld_msdos,TExternalLinkerMsDosTLink);
 {$elseif defined(USE_LINKER_ALINK)}

@@ -47,8 +47,9 @@ type
     Function CheckOperand: boolean; override;
   end;
 
+  { Operands are always in AT&T order.
+    Intel reader attaches them right-to-left, then shifts to start with 1 }
   Tx86Instruction=class(TInstruction)
-    OpOrder : TOperandOrder;
     opsize  : topsize;
     constructor Create(optype : tcoperand);override;
     { Operand sizes }
@@ -56,7 +57,6 @@ type
     procedure SetInstructionOpsize;
     procedure CheckOperandSizes;
     procedure CheckNonCommutativeOpcodes;
-    procedure SwapOperands;
     { Additional actions required by specific reader }
     procedure FixupOpcode;virtual;
     { opcode adding }
@@ -295,16 +295,6 @@ begin
 end;
 
 
-procedure Tx86Instruction.SwapOperands;
-begin
-  Inherited SwapOperands;
-  { mark the correct order }
-  if OpOrder=op_intel then
-    OpOrder:=op_att
-  else
-    OpOrder:=op_intel;
-end;
-
 const
 {$ifdef x86_64}
   topsize2memsize: array[topsize] of integer =
@@ -437,7 +427,11 @@ begin
             memopsize := 0;
             case operands[i].opr.typ of
                   OPR_LOCAL: memopsize := operands[i].opr.localvarsize * 8;
-              OPR_REFERENCE: memopsize := operands[i].opr.varsize * 8;
+              OPR_REFERENCE:
+                  if operands[i].opr.ref.refaddr = addr_pic then
+                    memopsize := sizeof(pint) * 8
+                  else
+                    memopsize := operands[i].opr.varsize * 8;
             end;
 
             if memopsize = 0 then memopsize := topsize2memsize[tx86operand(operands[i]).opsize];
@@ -784,11 +778,13 @@ begin
                      operands[i].opr.ref.symbol:=s;
                      operands[i].opr.ref.offset:=so;
                    end;
-  {$ifdef x86_64}
+  {$if defined(x86_64)}
                   tx86operand(operands[i]).opsize:=S_Q;
-  {$else x86_64}
+  {$elseif defined(i386)}
                   tx86operand(operands[i]).opsize:=S_L;
-  {$endif x86_64}
+  {$elseif defined(i8086)}
+                  tx86operand(operands[i]).opsize:=S_W;
+  {$endif}
                 end;
             end;
         end;
@@ -800,8 +796,6 @@ procedure Tx86Instruction.SetInstructionOpsize;
 begin
   if opsize<>S_NO then
    exit;
-  if (OpOrder=op_intel) then
-    SwapOperands;
   case ops of
     0 : ;
     1 :
@@ -811,7 +805,11 @@ begin
             (opcode=A_POP)) and
            (operands[1].opr.typ=OPR_REGISTER) and
            is_segment_reg(operands[1].opr.reg) then
+{$ifdef i8086}
+          opsize:=S_W
+{$else i8086}
           opsize:=S_L
+{$endif i8086}
         else
           opsize:=tx86operand(operands[1]).opsize;
       end;
@@ -937,8 +935,6 @@ end;
   but before swapping in the NASM and TASM writers PM }
 procedure Tx86Instruction.CheckNonCommutativeOpcodes;
 begin
-  if (OpOrder=op_intel) then
-    SwapOperands;
   if (
       (ops=2) and
       (operands[1].opr.typ=OPR_REGISTER) and
@@ -998,8 +994,6 @@ var
   ai   : taicpu;
 begin
   ConcatInstruction:=nil;
-  if (OpOrder=op_intel) then
-    SwapOperands;
 
   ai:=nil;
   for i:=1 to Ops do
@@ -1160,7 +1154,7 @@ begin
 
   ai:=taicpu.op_none(opcode,siz);
   ai.fileinfo:=filepos;
-  ai.SetOperandOrder(OpOrder);
+  ai.SetOperandOrder(op_att);
   ai.Ops:=Ops;
   ai.Allocate_oper(Ops);
   for i:=1 to Ops do
@@ -1170,7 +1164,12 @@ begin
        OPR_REGISTER:
          ai.loadreg(i-1,operands[i].opr.reg);
        OPR_SYMBOL:
-         ai.loadsymbol(i-1,operands[i].opr.symbol,operands[i].opr.symofs);
+{$ifdef i8086}
+        if operands[i].opr.symseg then
+          taicpu(ai).loadsegsymbol(i-1,operands[i].opr.symbol)
+        else
+{$endif i8086}
+          ai.loadsymbol(i-1,operands[i].opr.symbol,operands[i].opr.symofs);
        OPR_LOCAL :
          with operands[i].opr do
            ai.loadlocal(i-1,localsym,localsymofs,localindexreg,
@@ -1186,7 +1185,16 @@ begin
                      asize:=OT_BITS8;
                    OS_16,OS_S16, OS_M16:
                      asize:=OT_BITS16;
-                   OS_32,OS_S32,OS_F32,OS_M32 :
+                   OS_32,OS_S32 :
+{$ifdef i8086}
+                     if siz=S_FAR then
+                       asize:=OT_FAR
+                     else
+                       asize:=OT_BITS16;
+{$else i8086}
+                     asize:=OT_BITS32;
+{$endif i8086}
+                   OS_F32,OS_M32 :
                      asize:=OT_BITS32;
                    OS_64,OS_S64:
                      begin

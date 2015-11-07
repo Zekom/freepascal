@@ -18,12 +18,8 @@
 program FPDoc;
 
 uses
-{$ifdef LZX_USETHREADS}
  {$ifdef Unix}
-   CThreads,
- {$endif}
-{$endif}
-{$ifdef unix}
+  CThreads,
   cwstring,
 {$endif}
   SysUtils, Classes, Gettext, custapp,
@@ -288,7 +284,7 @@ begin
   else if s = '--warn-no-node' then
     FCreator.Options.WarnNoNode := True
   else if s = '--show-private' then
-    FCreator.Options.ShowPrivate := False
+    FCreator.Options.ShowPrivate := True
   else if s = '--stop-on-parser-error' then
     FCreator.Options.StopOnParseError := True
   else if s = '--dont-trim' then

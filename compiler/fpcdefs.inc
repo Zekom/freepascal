@@ -7,11 +7,9 @@
 
 { This reduces the memory requirements a lot }
 {$PACKENUM 1}
-{$ifdef FPC_HAS_VARSETS}
 {$ifndef FPC_BIG_ENDIAN}
 { $define USE_PACKSET1}
 {$endif}
-{$endif FPC_HAS_VARSETS}
 
 {$ifdef USE_PACKSET1}
 {$PACKSET 1}
@@ -56,7 +54,7 @@
   {$define SUPPORT_SAFECALL}
   {$define cpuneedsmulhelper}
   { TODO: add another define in order to disable the div helper for 16-bit divs? }
-  {$define cpuneedsdiv32helper}
+  {$define cpuneedsdivhelper}
   {$define VOLATILE_ES}
   {$define SUPPORT_GET_FRAME}
 {$endif i8086}
@@ -92,20 +90,6 @@
   {$define SUPPORT_GET_FRAME}
   {$define cpucapabilities}
 {$endif x86_64}
-
-{$ifdef ia64}
-  {$define cpuflags}
-  {$define cpu64bitalu}
-  {$define cpu64bitaddr}
-  {$define cpuextended}
-  {$define cpufloat128}
-{$endif ia64}
-
-{$ifdef alpha}
-  {$define cpu64bitalu}
-  {$define cpu64bitaddr}
-  {$define cpurefshaveindexreg}
-{$endif alpha}
 
 {$ifdef sparc}
   {$define cpu32bit}
@@ -145,7 +129,7 @@
   {$define cpu32bitalu}
   {$define cpuflags}
   {$define cpufpemu}
-  {$define cpuneedsdiv32helper}
+  {$define cpuneedsdivhelper}
   {$define cpurox}
   {$define cputargethasfixedstack}
   {$define cpurefshaveindexreg}
@@ -178,7 +162,7 @@
   {$define cpufpemu}
   {$define cpurefshaveindexreg}
   {$define cpucapabilities}
-  {$define cpuneedsdiv32helper}
+  {$define cpuneedsdivhelper}
 {$endif m68k}
 
 {$ifdef avr}
@@ -188,7 +172,7 @@
   {$define cpuflags}
   {$define cpunofpu}
   {$define cpunodefaultint}
-  {$define cpuneedsdiv32helper}
+  {$define cpuneedsdivhelper}
   {$define cpuneedsmulhelper}
   {$define cpurefshaveindexreg}
   {$define cpucapabilities}
@@ -242,6 +226,7 @@
   {$define cpurox}
   {$define cputargethasfixedstack}
   {$define cpurefshaveindexreg}
+  {$define SUPPORT_GET_FRAME}
 {$endif aarch64}
 
 {$IFDEF MACOS}
@@ -252,9 +237,23 @@
   (but there we don't support it)
 }
 {$ifdef cpu64bitaddr}
+{$ifndef USE_STABS_64}
 {$define NoDbgStabs}
+{$endif}
 {$endif}
 
 {$if not defined(FPC_HAS_TYPE_EXTENDED) and defined(i386)}
 {$error Cross-compiling from systems without support for an 80 bit extended floating point type to i386 is not yet supported at this time }
+{$endif}
+
+{ llvm backends partially use other backends for parameter info calculation,
+  alignment info, data sizes etc. They always support 64 bit alu though.
+}
+{$ifdef llvm}
+  {$undef SUPPORT_MMX}
+  {$undef cpu16bitalu}
+  {$undef cpu32bitalu}
+  {$define cpu64bitalu}
+  {$define cpuhighleveltarget}
+  {$define symansistr}
 {$endif}

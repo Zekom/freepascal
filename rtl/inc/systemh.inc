@@ -20,6 +20,7 @@
 
 {$I-,Q-,H-,R-,V-}
 {$mode objfpc}
+{$modeswitch advancedrecords}
 
 { At least 2.4.0 is required }
 {$if defined(VER1) or defined(VER2_0) or defined(VER2_2) }
@@ -331,6 +332,22 @@ Type
   FarPointer = Pointer;
 {$endif CPUAVR}
 
+{$ifdef CPUAARCH64}
+  {$define DEFAULT_DOUBLE}
+
+  {$define SUPPORT_SINGLE}
+  {$define SUPPORT_DOUBLE}
+
+  ValReal = Double;
+
+  { map comp to int64, but this doesn't mean we compile the comp support in! }
+  Comp = Int64;
+  PComp = ^Comp;
+
+  FarPointer = Pointer;
+{$endif CPUAARCH64}
+
+
 {$ifdef CPU64}
   SizeInt = Int64;
   SizeUInt = QWord;
@@ -382,6 +399,30 @@ Type
   ValUInt = Word;
 {$endif CPU16}
 
+{$if defined(VER2) or defined(VER3_0)}
+{$if defined(CPU16)}
+{$define CPUINT16}
+{$elseif defined(CPU32)}
+{$define CPUINT32}
+{$elseif defined(CPU64)}
+{$define CPUINT64}
+{$endif defined(CPU64)}
+{$endif defined(VER2) or defined(VER3_0)}
+
+{$if defined(CPUINT8)}
+  ALUSInt = ShortInt;
+  ALUUInt = Byte;
+{$elseif defined(CPUINT16)}
+  ALUSInt = SmallInt;
+  ALUUInt = Word;
+{$elseif defined(CPUINT32)}
+  ALUSInt = Longint;
+  ALUUInt = DWord;
+{$elseif defined(CPUINT64)}
+  ALUSInt = Int64;
+  ALUUInt = QWord;
+{$endif defined(CPUINT64)}
+
   { NativeInt and NativeUInt are Delphi compatibility types. Even though Delphi
     has IntPtr and UIntPtr, the Delphi documentation for NativeInt states that
     'The size of NativeInt is equivalent to the size of the pointer on the
@@ -412,6 +453,7 @@ Type
   AnsiChar            = Char;
   PAnsiChar           = PChar;
   PPAnsiChar          = PPChar;
+  PPPAnsiChar         = PPPChar;
 
   UCS4Char            = type 0..$10ffff;
   PUCS4Char           = ^UCS4Char;
@@ -524,7 +566,8 @@ Type
   { the size of textrec/filerec is hardcoded in the 2.6 compiler binary }
   {$define FPC_ANSI_TEXTFILEREC}
 {$endif}
-  TFileTextRecChar    = {$ifdef FPC_ANSI_TEXTFILEREC}AnsiChar{$else}UnicodeChar{$endif};
+
+  TFileTextRecChar    = {$if defined(FPC_ANSI_TEXTFILEREC) or not(defined(FPC_HAS_FEATURE_WIDESTRINGS))}AnsiChar{$else}UnicodeChar{$endif};
   PFileTextRecChar    = ^TFileTextRecChar;
 
   TTextLineBreakStyle = (tlbsLF,tlbsCRLF,tlbsCR);
@@ -675,7 +718,7 @@ var
   IsConsole : boolean = false; public name 'operatingsystem_isconsole';
   NoErrMsg: Boolean platform = False; // For Delphi compatibility, not used in FPC.
   FirstDotAtFileNameStartIsExtension : Boolean = False;
-  
+
   DefaultSystemCodePage,
   DefaultUnicodeCodePage,
   { the code page to use when sending paths/file names to OS file system API
@@ -709,6 +752,9 @@ Var
   { Stack checking }
   StackBottom : Pointer;
   StackLength : SizeUInt;
+  
+Var
+  WriteErrorsToStdErr : Boolean = True;
 
 function StackTop: Pointer;
 
@@ -853,13 +899,13 @@ function NtoLE(const AValue: QWord): QWord;{$ifdef SYSTEMINLINE}inline;{$endif}
 {$define FPC_HAS_INTERNAL_ROX_WORD}
 {$endif defined(cpux86_64) or defined(cpui386)}
 
-{$if defined(cpux86_64) or defined(cpui386) or defined(arm) or defined(powerpc) or defined(powerpc64)}
+{$if defined(cpux86_64) or defined(cpui386) or defined(arm) or defined(powerpc) or defined(powerpc64) or defined(cpuaarch64)}
 {$define FPC_HAS_INTERNAL_ROX_DWORD}
-{$endif defined(cpux86_64) or defined(cpui386) or defined(arm) or defined(powerpc) or defined(powerpc64)}
+{$endif defined(cpux86_64) or defined(cpui386) or defined(arm) or defined(powerpc) or defined(powerpc64) or defined(cpuaarch64)}
 
-{$if defined(cpux86_64) or defined(powerpc64)}
+{$if defined(cpux86_64) or defined(powerpc64) or defined(cpuaarch64)}
 {$define FPC_HAS_INTERNAL_ROX_QWORD}
-{$endif defined(cpux86_64) or defined(powerpc64)}
+{$endif defined(cpux86_64) or defined(powerpc64) or defined(cpuaarch64)}
 
 {$endif FPC_HAS_INTERNAL_ROX}
 
@@ -934,9 +980,9 @@ function RolQWord(Const AValue : QWord;const Dist : Byte): QWord;{$ifdef SYSTEMI
 {$define FPC_HAS_INTERNAL_SAR_DWORD}
 { $endif defined(cpux86_64) or defined(cpui386) or defined(arm) or defined(powerpc) or defined(powerpc64) or defined(mips) or defined(mipsel)}
 
-{$if defined(cpux86_64) or defined(powerpc64)}
+{$if defined(cpux86_64) or defined(powerpc64) or defined(cpuaarch64)}
 {$define FPC_HAS_INTERNAL_SAR_QWORD}
-{$endif defined(cpux86_64) or defined(powerpc64)}
+{$endif defined(cpux86_64) or defined(powerpc64) or defined(cpuaarch64)}
 
 {$endif FPC_HAS_INTERNAL_SAR}
 
@@ -968,23 +1014,23 @@ function fpc_SarInt64(Const AValue : Int64;const Shift : Byte): Int64;compilerpr
 {$endif FPC_HAS_INTERNAL_SAR_QWORD}
 
 {$ifdef FPC_HAS_INTERNAL_BSF}
-{$if defined(cpui386) or defined(cpux86_64) or defined(cpuarm)}
+{$if defined(cpui386) or defined(cpux86_64) or defined(cpuarm) or defined(cpuaarch64) or defined(cpupowerpc32) or defined(cpupowerpc64)}
 {$define FPC_HAS_INTERNAL_BSF_BYTE}
 {$define FPC_HAS_INTERNAL_BSF_WORD}
 {$define FPC_HAS_INTERNAL_BSF_DWORD}
 {$endif}
-{$if defined(cpux86_64)}
+{$if defined(cpux86_64) or defined(cpuaarch64) or defined(cpupowerpc64)}
 {$define FPC_HAS_INTERNAL_BSF_QWORD}
 {$endif}
 {$endif}
 
 {$ifdef FPC_HAS_INTERNAL_BSR}
-{$if defined(cpui386) or defined(cpux86_64) or defined(cpuarm)}
+{$if defined(cpui386) or defined(cpux86_64) or defined(cpuarm) or defined(cpuaarch64) or defined(cpupowerpc32) or defined(cpupowerpc64)}
 {$define FPC_HAS_INTERNAL_BSR_BYTE}
 {$define FPC_HAS_INTERNAL_BSR_WORD}
 {$define FPC_HAS_INTERNAL_BSR_DWORD}
 {$endif}
-{$if defined(cpux86_64)}
+{$if defined(cpux86_64) or defined(cpuaarch64) or defined(cpupowerpc64)}
 {$define FPC_HAS_INTERNAL_BSR_QWORD}
 {$endif}
 {$endif}
@@ -1062,18 +1108,32 @@ Function  Sseg:Word;{$ifdef SYSTEMINLINE}inline;{$endif}
 function strpas(p:pchar):shortstring;{$ifdef SYSTEMINLINE}inline;{$endif}
 function strlen(p:pchar):sizeint;external name 'FPC_PCHAR_LENGTH';
 
+{ result:
+  <0: invalid sequence detected after processing "-result" bytes
+  0: incomplete (may still be valid if MaxLookAhead is increased)
+  >0: sequence of result bytes forms a codepoint (+ combining diacritics if that
+      parameter was true)
+}
+function Utf8CodePointLen(P: PAnsiChar; MaxLookAhead: SizeInt; IncludeCombiningDiacriticalMarks: Boolean): SizeInt;
+
 { Shortstring functions }
 Procedure Delete(var s:shortstring;index:SizeInt;count:SizeInt);
 Procedure Insert(const source:shortstring;var s:shortstring;index:SizeInt);
 Procedure Insert(source:Char;var s:shortstring;index:SizeInt);
-Function  Pos(const substr:shortstring;const s:shortstring):SizeInt;
-Function  Pos(C:Char;const s:shortstring):SizeInt;
+Function  Pos(const substr:shortstring;const s:shortstring; Offset: Sizeint = 1):SizeInt;
+Function  Pos(C:Char;const s:shortstring; Offset: Sizeint = 1):SizeInt;
 {$ifdef FPC_HAS_FEATURE_ANSISTRINGS}
-Function  Pos(const Substr : ShortString; const Source : RawByteString) : SizeInt;
+Function  Pos(const Substr : ShortString; const Source : RawByteString; Offset: Sizeint = 1) : SizeInt;
+
+{$ifdef FPC_HAS_CPSTRING}
+Procedure fpc_setstring_ansistr_pansichar(out S : RawByteString; Buf : PAnsiChar; Len : SizeInt; cp: TSystemCodePage); rtlproc; compilerproc;
+Procedure fpc_setstring_ansistr_pwidechar(out S : RawByteString; Buf : PWideChar; Len : SizeInt; cp: TSystemCodePage); rtlproc; compilerproc;
+{$else}
 Procedure SetString(out S : AnsiString; Buf : PAnsiChar; Len : SizeInt);
 Procedure SetString(out S : AnsiString; Buf : PWideChar; Len : SizeInt);
+{$endif}
 {$endif FPC_HAS_FEATURE_ANSISTRINGS}
-Procedure SetString (out S : Shortstring; Buf : PChar; Len : SizeInt);
+Procedure {$ifdef FPC_HAS_CPSTRING}fpc_setstring_shortstr{$else}SetString{$endif}(out S : Shortstring; Buf : PChar; Len : SizeInt); {$ifdef FPC_HAS_CPSTRING} compilerproc; {$endif FPC_HAS_CPSTRING}
 function  ShortCompareText(const S1, S2: shortstring): SizeInt;
 Function  upCase(const s:shortstring):shortstring;
 Function  lowerCase(const s:shortstring):shortstring; overload;
@@ -1099,7 +1159,7 @@ Function  hexStr(Val:Pointer):shortstring;
 Function chr(b : byte) : Char;      [INTERNPROC: fpc_in_chr_byte];
 Function  upCase(c:Char):Char;
 Function  lowerCase(c:Char):Char; overload;
-function  pos(const substr : shortstring;c:char): SizeInt;
+function  pos(const substr : shortstring;c:char; Offset: Sizeint = 1): SizeInt;
 
 
 {****************************************************************************
@@ -1108,8 +1168,8 @@ function  pos(const substr : shortstring;c:char): SizeInt;
 
 {$ifdef FPC_HAS_FEATURE_ANSISTRINGS}
 Procedure UniqueString(var S : RawByteString);{$ifdef FPC_HAS_CPSTRING}rtlproc;{$endif FPC_HAS_CPSTRING}external name 'FPC_ANSISTR_UNIQUE';
-Function  Pos (const Substr : RawByteString; const Source : RawByteString) : SizeInt;
-Function  Pos (c : AnsiChar; const s : RawByteString) : SizeInt;
+Function  Pos (const Substr : RawByteString; const Source : RawByteString; Offset: Sizeint = 1) : SizeInt;
+Function  Pos (c : AnsiChar; const s : RawByteString; Offset: Sizeint = 1) : SizeInt;
 Procedure Insert (const Source : RawByteString; var S : RawByteString; Index : SizeInt);{$ifdef FPC_HAS_CPSTRING}rtlproc;{$endif FPC_HAS_CPSTRING}
 Procedure Delete (var S : RawByteString; Index,Size: SizeInt);{$ifdef FPC_HAS_CPSTRING}rtlproc;{$endif FPC_HAS_CPSTRING}
 Function  StringOfChar(c : Ansichar;l : SizeInt) : AnsiString;
@@ -1371,11 +1431,12 @@ Const
 
 Procedure Error(RunTimeError : TRunTimeError);
 {$ifdef FPC_HAS_FEATURE_COMMANDARGS}
-Function  Paramcount:Longint;
+Function  ParamCount:Longint;
 Function  ParamStr(l:Longint):string;
 {$endif FPC_HAS_FEATURE_COMMANDARGS}
 
 Procedure Dump_Stack(var f : text;fp:pointer;addr : codepointer = nil);
+procedure Dump_Stack(var f : text;skipframes : longint);
 {$ifdef FPC_HAS_FEATURE_EXCEPTIONS}
 procedure DumpExceptionBackTrace(var f:text);
 {$endif FPC_HAS_FEATURE_EXCEPTIONS}
@@ -1469,6 +1530,14 @@ const
 {$endif FPC_HAS_FEATURE_VARIANTS}
 
 {*****************************************************************************
+                           RTTI support
+*****************************************************************************}
+
+{$ifdef FPC_HAS_FEATURE_RTTI}
+{$i rttih.inc}
+{$endif FPC_HAS_FEATURE_RTTI}
+
+{*****************************************************************************
                    Internal helper routines support
 *****************************************************************************}
 
@@ -1497,10 +1566,28 @@ const
 {$endif FPC_HAS_FEATURE_THREADING}
 
 {*****************************************************************************
+                          Dynamic library support
+*****************************************************************************}
+
+{$ifdef FPC_HAS_FEATURE_DYNLIBS}
+{$i dynlibh.inc}
+{$endif FPC_HAS_FEATURE_DYNLIBS}
+
+{*****************************************************************************
                           Resources support
 *****************************************************************************}
 
 {$i resh.inc}
+
+
+{*****************************************************************************
+                          Exception support
+*****************************************************************************}
+
+{ contains the definition of the TExceptAddr type, which is required
+  by the compiler to generate code for any routine containing
+  implicit or explicit exceptions }
+{$i excepth.inc}
 
 {*****************************************************************************
                    FPDoc phony declarations.

@@ -111,6 +111,7 @@ implementation
           resourcefileclass : nil;
           resflags : [];
         );
+{$ifdef x86_64}
     res_win64_gorc_info : tresinfo =
         (
           id     : res_win64_gorc;
@@ -121,6 +122,7 @@ implementation
           resourcefileclass : nil;
           resflags : [];
         );
+{$endif x86_64}
 
 
   Procedure GlobalInitSysInitUnitName(Linker : TLinker);
@@ -389,7 +391,7 @@ implementation
         SmartFilesCount:=0;
         SmartHeaderCount:=0;
         current_module.linkotherstaticlibs.add(current_module.importlibfilename,link_always);
-        ObjWriter:=TARObjectWriter.create(current_module.importlibfilename);
+        ObjWriter:=TARObjectWriter.CreateAr(current_module.importlibfilename);
         ObjOutput:=TPECoffObjOutput.Create(ObjWriter);
         for i:=0 to current_module.ImportLibraryList.Count-1 do
           begin
@@ -933,6 +935,7 @@ implementation
     constructor TInternalLinkerWin.Create;
       begin
         inherited Create;
+        CArObjectReader:=TArObjectReader;
         CExeoutput:=TPECoffexeoutput;
         CObjInput:=TPECoffObjInput;
       end;
@@ -955,7 +958,7 @@ implementation
                     imagebase:=$10000
                   else
 {$ifdef cpu64bitaddr}
-                    if (paratargetdbg = dbg_stabs) then
+                    if (target_dbg.id = dbg_stabs) then
                       imagebase:=$400000
                     else
                       imagebase:= $100000000;

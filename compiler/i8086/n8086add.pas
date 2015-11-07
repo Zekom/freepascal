@@ -55,7 +55,7 @@ interface
     uses
       globtype,systems,
       cutils,verbose,globals,constexp,pass_1,
-      symconst,symdef,symtype,paramgr,defutil,
+      symconst,symdef,symtype,symcpu,paramgr,defutil,
       aasmbase,aasmtai,aasmdata,aasmcpu,
       cgbase,procinfo,
       ncal,ncon,nset,cgutils,tgobj,
@@ -88,6 +88,11 @@ interface
             (rt = pointerconstn) and is_farpointer(rd) and
             is_constintnode(left) and
             (nodetype=addn)
+           ) or
+           (
+            (lt in [pointerconstn,niln]) and is_farpointer(ld) and
+            (rt in [pointerconstn,niln]) and is_farpointer(rd) and
+            (nodetype in [ltn,lten,gtn,gten,equaln,unequaln])
            ) then
           begin
             t:=nil;
@@ -143,6 +148,18 @@ interface
                   else
                     internalerror(2014040606);
                 end;
+              ltn:
+                t:=cordconstnode.create(ord(word(qword(lv))<word(qword(rv))),pasbool8type,true);
+              lten:
+                t:=cordconstnode.create(ord(word(qword(lv))<=word(qword(rv))),pasbool8type,true);
+              gtn:
+                t:=cordconstnode.create(ord(word(qword(lv))>word(qword(rv))),pasbool8type,true);
+              gten:
+                t:=cordconstnode.create(ord(word(qword(lv))>=word(qword(rv))),pasbool8type,true);
+              equaln:
+                t:=cordconstnode.create(ord(lv=rv),pasbool8type,true);
+              unequaln:
+                t:=cordconstnode.create(ord(lv<>rv),pasbool8type,true);
               else
                 internalerror(2014040605);
             end;
@@ -518,6 +535,8 @@ interface
 
     procedure ti8086addnode.second_cmp64bit;
       var
+        truelabel,
+        falselabel : tasmlabel;
         hregister,
         hregister2 : tregister;
         href       : treference;
@@ -536,10 +555,10 @@ interface
            case nodetype of
               ltn,gtn:
                 begin
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),current_procinfo.CurrTrueLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),location.truelabel);
                    { cheat a little bit for the negative test }
                    toggleflag(nf_swapped);
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),current_procinfo.CurrFalseLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),location.falselabel);
                    toggleflag(nf_swapped);
                 end;
               lten,gten:
@@ -549,19 +568,19 @@ interface
                      nodetype:=ltn
                    else
                      nodetype:=gtn;
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),current_procinfo.CurrTrueLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),location.truelabel);
                    { cheat for the negative test }
                    if nodetype=ltn then
                      nodetype:=gtn
                    else
                      nodetype:=ltn;
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),current_procinfo.CurrFalseLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),location.falselabel);
                    nodetype:=oldnodetype;
                 end;
               equaln:
-                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,current_procinfo.CurrFalseLabel);
+                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,location.falselabel);
               unequaln:
-                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,current_procinfo.CurrTrueLabel);
+                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,location.truelabel);
            end;
         end;
 
@@ -580,10 +599,10 @@ interface
                 begin
                    { the comparisaion of the low word have to be }
                    {  always unsigned!                           }
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),current_procinfo.CurrTrueLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),location.truelabel);
                    { cheat a little bit for the negative test }
                    toggleflag(nf_swapped);
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),current_procinfo.CurrFalseLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),location.falselabel);
                    toggleflag(nf_swapped);
                 end;
               lten,gten:
@@ -593,19 +612,19 @@ interface
                      nodetype:=ltn
                    else
                      nodetype:=gtn;
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),current_procinfo.CurrTrueLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),location.truelabel);
                    { cheat for the negative test }
                    if nodetype=ltn then
                      nodetype:=gtn
                    else
                      nodetype:=ltn;
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),current_procinfo.CurrFalseLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),location.falselabel);
                    nodetype:=oldnodetype;
                 end;
               equaln:
-                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,current_procinfo.CurrFalseLabel);
+                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,location.falselabel);
               unequaln:
-                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,current_procinfo.CurrTrueLabel);
+                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,location.truelabel);
            end;
         end;
 
@@ -618,29 +637,36 @@ interface
                 begin
                    { the comparisaion of the low word have to be }
                    {  always unsigned!                           }
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),current_procinfo.CurrTrueLabel);
-                   cg.a_jmp_always(current_asmdata.CurrAsmList,current_procinfo.CurrFalseLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),location.truelabel);
+                   cg.a_jmp_always(current_asmdata.CurrAsmList,location.falselabel);
                 end;
               equaln:
                 begin
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,current_procinfo.CurrFalseLabel);
-                   cg.a_jmp_always(current_asmdata.CurrAsmList,current_procinfo.CurrTrueLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,location.falselabel);
+                   cg.a_jmp_always(current_asmdata.CurrAsmList,location.truelabel);
                 end;
               unequaln:
                 begin
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,current_procinfo.CurrTrueLabel);
-                   cg.a_jmp_always(current_asmdata.CurrAsmList,current_procinfo.CurrFalseLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,location.truelabel);
+                   cg.a_jmp_always(current_asmdata.CurrAsmList,location.falselabel);
                 end;
            end;
         end;
 
       begin
+        truelabel:=nil;
+        falselabel:=nil;
         pass_left_right;
 
         unsigned:=((left.resultdef.typ=orddef) and
                    (torddef(left.resultdef).ordtype=u64bit)) or
                   ((right.resultdef.typ=orddef) and
                    (torddef(right.resultdef).ordtype=u64bit));
+
+        { we have LOC_JUMP as result }
+        current_asmdata.getjumplabel(truelabel);
+        current_asmdata.getjumplabel(falselabel);
+        location_reset_jump(location,truelabel,falselabel);
 
         { left and right no register?  }
         { then one must be demanded    }
@@ -709,7 +735,7 @@ interface
                  middlejmp64bitcmp;
                  emit_ref_reg(A_CMP,S_W,right.location.reference,left.location.register64.reglo);
                  lastjmp64bitcmp;
-                 cg.a_jmp_always(current_asmdata.CurrAsmList,current_procinfo.CurrFalseLabel);
+                 cg.a_jmp_always(current_asmdata.CurrAsmList,location.falselabel);
                  location_freetemp(current_asmdata.CurrAsmList,right.location);
                end;
              LOC_CONSTANT :
@@ -727,13 +753,12 @@ interface
                internalerror(200203282);
            end;
          end;
-
-        { we have LOC_JUMP as result }
-        location_reset(location,LOC_JUMP,OS_NO)
       end;
 
     procedure ti8086addnode.second_cmp32bit;
       var
+        truelabel,
+        falselabel: tasmlabel;
         hregister : tregister;
         href      : treference;
         unsigned  : boolean;
@@ -751,10 +776,10 @@ interface
            case nodetype of
               ltn,gtn:
                 begin
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),current_procinfo.CurrTrueLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),location.truelabel);
                    { cheat a little bit for the negative test }
                    toggleflag(nf_swapped);
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),current_procinfo.CurrFalseLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),location.falselabel);
                    toggleflag(nf_swapped);
                 end;
               lten,gten:
@@ -764,19 +789,19 @@ interface
                      nodetype:=ltn
                    else
                      nodetype:=gtn;
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),current_procinfo.CurrTrueLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),location.truelabel);
                    { cheat for the negative test }
                    if nodetype=ltn then
                      nodetype:=gtn
                    else
                      nodetype:=ltn;
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),current_procinfo.CurrFalseLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(unsigned),location.falselabel);
                    nodetype:=oldnodetype;
                 end;
               equaln:
-                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,current_procinfo.CurrFalseLabel);
+                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,location.falselabel);
               unequaln:
-                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,current_procinfo.CurrTrueLabel);
+                cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,location.truelabel);
            end;
         end;
 
@@ -789,23 +814,25 @@ interface
                 begin
                    { the comparisaion of the low dword have to be }
                    {  always unsigned!                            }
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),current_procinfo.CurrTrueLabel);
-                   cg.a_jmp_always(current_asmdata.CurrAsmList,current_procinfo.CurrFalseLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,getresflags(true),location.truelabel);
+                   cg.a_jmp_always(current_asmdata.CurrAsmList,location.falselabel);
                 end;
               equaln:
                 begin
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,current_procinfo.CurrFalseLabel);
-                   cg.a_jmp_always(current_asmdata.CurrAsmList,current_procinfo.CurrTrueLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,location.falselabel);
+                   cg.a_jmp_always(current_asmdata.CurrAsmList,location.truelabel);
                 end;
               unequaln:
                 begin
-                   cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,current_procinfo.CurrTrueLabel);
-                   cg.a_jmp_always(current_asmdata.CurrAsmList,current_procinfo.CurrFalseLabel);
+                   cg.a_jmp_flags(current_asmdata.CurrAsmList,F_NE,location.truelabel);
+                   cg.a_jmp_always(current_asmdata.CurrAsmList,location.falselabel);
                 end;
            end;
         end;
 
       begin
+        truelabel:=nil;
+        falselabel:=nil;
         pass_left_right;
 
         unsigned:=((left.resultdef.typ=orddef) and
@@ -813,6 +840,11 @@ interface
                   ((right.resultdef.typ=orddef) and
                    (torddef(right.resultdef).ordtype=u32bit)) or
                   is_hugepointer(left.resultdef);
+
+        { we have LOC_JUMP as result }
+        current_asmdata.getjumplabel(truelabel);
+        current_asmdata.getjumplabel(falselabel);
+        location_reset_jump(location,truelabel,falselabel);
 
         { left and right no register?  }
         { then one must be demanded    }
@@ -866,23 +898,28 @@ interface
                  dec(href.offset,2);
                  emit_ref_reg(A_CMP,S_W,href,left.location.register);
                  secondjmp32bitcmp;
-                 cg.a_jmp_always(current_asmdata.CurrAsmList,current_procinfo.CurrFalseLabel);
+                 cg.a_jmp_always(current_asmdata.CurrAsmList,location.falselabel);
                  location_freetemp(current_asmdata.CurrAsmList,right.location);
                end;
              LOC_CONSTANT :
                begin
-                 current_asmdata.CurrAsmList.concat(taicpu.op_const_reg(A_CMP,S_W,aint((right.location.value shr 16) and $FFFF),GetNextReg(left.location.register)));
-                 firstjmp32bitcmp;
-                 current_asmdata.CurrAsmList.concat(taicpu.op_const_reg(A_CMP,S_W,aint(right.location.value and $FFFF),left.location.register));
-                 secondjmp32bitcmp;
+                 if (right.location.value=0) and (nodetype in [equaln,unequaln]) and (left.location.loc=LOC_REGISTER) then
+                   begin
+                     current_asmdata.CurrAsmList.concat(taicpu.op_reg_reg(A_OR,S_W,GetNextReg(left.location.register),left.location.register));
+                     secondjmp32bitcmp;
+                   end
+                 else
+                   begin
+                     current_asmdata.CurrAsmList.concat(taicpu.op_const_reg(A_CMP,S_W,aint((right.location.value shr 16) and $FFFF),GetNextReg(left.location.register)));
+                     firstjmp32bitcmp;
+                     current_asmdata.CurrAsmList.concat(taicpu.op_const_reg(A_CMP,S_W,aint(right.location.value and $FFFF),left.location.register));
+                     secondjmp32bitcmp;
+                   end;
                end;
              else
                internalerror(200203282);
            end;
          end;
-
-        { we have LOC_JUMP as result }
-        location_reset(location,LOC_JUMP,OS_NO)
       end;
 
 
@@ -938,7 +975,7 @@ interface
       begin
         if is_farpointer(left.resultdef) then
           second_cmpfarpointer
-        else if is_32bit(left.resultdef) or is_hugepointer(left.resultdef) then
+        else if is_32bit(left.resultdef) or is_hugepointer(left.resultdef) or is_farprocvar(left.resultdef) then
           second_cmp32bit
         else
           inherited second_cmpordinal;
@@ -960,6 +997,9 @@ interface
       asmops: array[boolean] of tasmop = (A_IMUL, A_MUL);
 
     begin
+      reg:=NR_NO;
+      reference_reset(ref,sizeof(pint));
+
       pass_left_right;
 
       { MUL is faster than IMUL on the 8086 & 8088 (and equal in speed on 286+),

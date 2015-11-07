@@ -16,7 +16,8 @@ units=$(SYSTEMUNIT) $(SYSINIT_UNITS) $(CPU_UNITS) \
       rtlconsts dos cwstring fpcylix unixcp fpwidestring
 implicitunits=exeinfo \
       cp1250 cp1251 cp1252 cp1253 cp1254 cp1255 cp1256 cp1257 cp1258 \
-      cp437 cp646 cp850 cp856 cp866 cp874 cp8859_1 cp8859_5 cp8859_2 cp852
+      cp437 cp646 cp850 cp856 cp866 cp874 cp8859_1 cp8859_5 cp8859_2 cp852 \
+      unicodedata  unicodenumtable
 rsts=math  typinfo  sysconst rtlconsts
 
 [require]
@@ -82,6 +83,7 @@ OBJPASDIR=$(RTL)/objpas
 # SYSINCNAMES
 include $(INC)/makefile.inc
 SYSINCDEPS=$(addprefix $(INC)/,$(SYSINCNAMES))
+SYSINCDEPS:=$(SYSINCDEPS) sysandroid.inc
 
 # Get the processor dependent include file names.
 # This will set the following variables :
@@ -121,7 +123,7 @@ $(SYSTEMUNIT)$(PPUEXT) : $(LINUXINC)/$(SYSTEMUNIT).pp $(SYSDEPS)
         $(COMPILER) -Us -Sg $(LINUXINC)/$(SYSTEMUNIT).pp
 
 uuchar$(PPUEXT): $(SYSTEMUNIT)$(PPUEXT) $(INC)/uuchar.pp
-		$(COMPILER) $(INC)/uuchar.pp
+	$(COMPILER) $(INC)/uuchar.pp
 
 objpas$(PPUEXT): $(OBJPASDIR)/objpas.pp $(INC)/except.inc $(SYSTEMUNIT)$(PPUEXT)
         $(COMPILER) -I$(OBJPASDIR) $(OBJPASDIR)/objpas.pp
@@ -129,6 +131,7 @@ objpas$(PPUEXT): $(OBJPASDIR)/objpas.pp $(INC)/except.inc $(SYSTEMUNIT)$(PPUEXT)
 strings$(PPUEXT) : $(INC)/strings.pp $(INC)/stringsi.inc\
                    $(PROCINC)/strings.inc $(PROCINC)/stringss.inc\
                    $(SYSTEMUNIT)$(PPUEXT)
+	$(COMPILER) $(INC)/strings.pp
 
 #
 # $(SYSTEMUNIT) Dependent Units
@@ -155,7 +158,7 @@ baseunix$(PPUEXT) : $(UNIXINC)/baseunix.pp $(LINUXINC)/errno.inc $(LINUXINC)/pty
   $(UNIXINC)/genfuncs.inc $(SYSTEMUNIT)$(PPUEXT)
         $(COMPILER) $(UNIXINC)/baseunix.pp
 
-dl$(PPUEXT) : $(UNIXINC)/dl.pp $(SYSTEMUNIT)$(PPUEXT)
+dl$(PPUEXT) : $(UNIXINC)/dl.pp $(SYSTEMUNIT)$(PPUEXT) dlandroid.inc
         $(COMPILER) $(UNIXINC)/dl.pp
 
 dynlibs$(PPUEXT) : $(INC)/dynlibs.pas $(UNIXINC)/dynlibs.inc dl$(PPUEXT) objpas$(PPUEXT)
@@ -163,7 +166,7 @@ dynlibs$(PPUEXT) : $(INC)/dynlibs.pas $(UNIXINC)/dynlibs.inc dl$(PPUEXT) objpas$
 
 initc$(PPUEXT) : $(UNIXINC)/initc.pp ctypes$(PPUEXT) $(SYSTEMUNIT)$(PPUEXT)
         $(COMPILER) $(UNIXINC)/initc.pp
-        
+
 unixcp$(PPUEXT) : $(UNIXINC)/unixcp.pp $(SYSTEMUNIT)$(PPUEXT) objpas$(PPUEXT) baseunix$(PPUEXT)
         $(COMPILER) $(UNIXINC)/unixcp.pp
 

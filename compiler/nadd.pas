@@ -73,6 +73,10 @@ interface
           { full 64 bit multiplies.                                }
           function use_generic_mul64bit: boolean; virtual;
 
+          { shall be overriden if the target cpu supports
+            an fma instruction
+          }
+          function use_fma : boolean; virtual;
           { This routine calls internal runtime library helpers
             for all floating point arithmetic in the case
             where the emulation switches is on. Otherwise
@@ -80,18 +84,22 @@ interface
             the code generation phase.
           }
           function first_addfloat : tnode; virtual;
-         private
-           { checks whether a muln can be calculated as a 32bit }
-           { * 32bit -> 64 bit                                  }
-           function try_make_mul32to64: boolean;
-           { Match against the ranges, i.e.:
-             var a:1..10;
-             begin
-               if a>0 then
-                 ...
-             always evaluates to true. (DM)
-           }
-           function cmp_of_disjunct_ranges(var res : boolean) : boolean;
+       private
+          { checks whether a muln can be calculated as a 32bit }
+          { * 32bit -> 64 bit                                  }
+          function try_make_mul32to64: boolean;
+
+          { Match against the ranges, i.e.:
+            var a:1..10;
+            begin
+              if a>0 then
+                ...
+            always evaluates to true. (DM)
+          }
+          function cmp_of_disjunct_ranges(var res : boolean) : boolean;
+
+          { tries to replace the current node by a fma node }
+          function try_fma(ld,rd : tdef) : tnode;
        end;
        taddnodeclass = class of taddnode;
 
@@ -401,8 +409,7 @@ implementation
           end;
 
         { both are int constants }
-        if (
-            (
+        if  (
              is_constintnode(left) and
              is_constintnode(right)
             ) or
@@ -414,7 +421,7 @@ implementation
             (
              is_constenumnode(left) and
              is_constenumnode(right) and
-             allowenumop(nodetype))
+             (allowenumop(nodetype) or (nf_internal in flags))
             ) or
             (
              (lt = pointerconstn) and
@@ -676,6 +683,50 @@ implementation
              result:=t;
              exit;
           end;
+{$if FPC_FULLVERSION>20700}
+        { bestrealrec is 2.7.1+ only }
+
+        { replace .../const by a multiplication, but only if fastmath is enabled or
+          the division is done by a power of 2, do not mess with special floating point values like Inf etc.
+
+          do this after constant folding to avoid unnecessary precision loss if
+          an slash expresion would be first converted into a multiplication and later
+          folded }
+        if (nodetype=slashn) and
+          { do not mess with currency types }
+          (not(is_currency(right.resultdef))) and
+          (((cs_opt_fastmath in current_settings.optimizerswitches) and (rt=ordconstn)) or
+           ((cs_opt_fastmath in current_settings.optimizerswitches) and (rt=realconstn) and
+            (bestrealrec(trealconstnode(right).value_real).SpecialType in [fsPositive,fsNegative])
+           ) or
+           ((rt=realconstn) and
+            (bestrealrec(trealconstnode(right).value_real).SpecialType in [fsPositive,fsNegative]) and
+            { mantissa returns the mantissa/fraction without the hidden 1, so power of two means only the hidden
+              bit is set => mantissa must be 0 }
+            (bestrealrec(trealconstnode(right).value_real).Mantissa=0)
+           )
+          ) then
+          case rt of
+            ordconstn:
+              begin
+                { the normal code handles div/0 }
+                if (tordconstnode(right).value<>0) then
+                  begin
+                    nodetype:=muln;
+                    t:=crealconstnode.create(1/tordconstnode(right).value,resultdef);
+                    right.free;
+                    right:=t;
+                    exit;
+                  end;
+              end;
+            realconstn:
+              begin
+                nodetype:=muln;
+                trealconstnode(right).value_real:=1.0/trealconstnode(right).value_real;
+                exit;
+              end;
+          end;
+{$endif FPC_FULLVERSION>20700}
 
         { first, we handle widestrings, so we can check later for }
         { stringconstn only                                       }
@@ -1607,7 +1658,7 @@ implementation
                         llow:=rlow;
                         lhigh:=rhigh;
                       end;
-                    nd:=csetdef.create(tsetdef(ld).elementdef,min(llow,rlow).svalue,max(lhigh,rhigh).svalue);
+                    nd:=csetdef.create(tsetdef(ld).elementdef,min(llow,rlow).svalue,max(lhigh,rhigh).svalue,true);
                     inserttypeconv(left,nd);
                     if (rd.typ=setdef) then
                       inserttypeconv(right,nd)
@@ -1931,6 +1982,10 @@ implementation
                           ctypeconvnode.create_internal(left,methodpointertype));
                 typecheckpass(left);
               end;
+            if lt=niln then
+              inserttypeconv_explicit(left,right.resultdef)
+            else
+              inserttypeconv_explicit(right,left.resultdef)
           end
 
        { support dynamicarray=nil,dynamicarray<>nil }
@@ -1982,7 +2037,7 @@ implementation
           begin
             if is_zero_based_array(rd) then
               begin
-                resultdef:=getpointerdef(tarraydef(rd).elementdef);
+                resultdef:=cpointerdef.getreusable(tarraydef(rd).elementdef);
                 inserttypeconv(right,resultdef);
               end
             else
@@ -2014,7 +2069,7 @@ implementation
            begin
              if is_zero_based_array(ld) then
                begin
-                  resultdef:=getpointerdef(tarraydef(ld).elementdef);
+                  resultdef:=cpointerdef.getreusable(tarraydef(ld).elementdef);
                   inserttypeconv(left,resultdef);
                end
              else
@@ -2061,8 +2116,8 @@ implementation
               begin
                 if tprocvardef(rd).is_addressonly then
                   begin
-                    inserttypeconv_internal(right,voidpointertype);
-                    inserttypeconv_internal(left,voidpointertype);
+                    inserttypeconv_internal(right,voidcodepointertype);
+                    inserttypeconv_internal(left,voidcodepointertype);
                   end
                 else
                   begin
@@ -2088,7 +2143,7 @@ implementation
          { enums }
          else if (ld.typ=enumdef) and (rd.typ=enumdef) then
           begin
-            if allowenumop(nodetype) then
+            if allowenumop(nodetype) or (nf_internal in flags) then
               inserttypeconv(right,left.resultdef)
             else
               CGMessage3(type_e_operator_not_supported_for_types,node2opstr(nodetype),ld.typename,rd.typename);
@@ -2101,7 +2156,7 @@ implementation
             inserttypeconv(right,sinttype);
           end;
 
-         if cmp_of_disjunct_ranges(res) then
+         if cmp_of_disjunct_ranges(res) and not(nf_internal in flags) then
            begin
              if res then
                CGMessage(type_w_comparison_always_true)
@@ -2304,7 +2359,7 @@ implementation
                     { compare the length with 0 }
                     result := caddnode.create(nodetype,
                       cinlinenode.create(in_length_x,false,left),
-                      cordconstnode.create(0,s32inttype,false))
+                      cordconstnode.create(0,s8inttype,false))
                   else
                     begin
                       (*
@@ -2364,7 +2419,7 @@ implementation
                 ccallparanode.create(right,ccallparanode.create(left,nil)));
               { and compare its result with 0 according to the original operator }
               result := caddnode.create(nodetype,result,
-                cordconstnode.create(0,s32inttype,false));
+                cordconstnode.create(0,s8inttype,false));
               left := nil;
               right := nil;
             end;
@@ -2612,6 +2667,127 @@ implementation
       end;
 
 
+    function taddnode.use_fma : boolean;
+      begin
+        result:=false;
+      end;
+
+
+    function taddnode.try_fma(ld,rd : tdef) : tnode;
+      var
+        inlinennr : Integer;
+      begin
+        result:=nil;
+        if (cs_opt_fastmath in current_settings.optimizerswitches) and
+          use_fma and
+          (nodetype in [addn,subn]) and
+          (rd.typ=floatdef) and (ld.typ=floatdef) and
+          (is_single(rd) or is_double(rd)) and
+          equal_defs(rd,ld) and
+          { transforming a*b+c into fma(a,b,c) makes only sense if c can be
+            calculated easily. Consider a*b+c*d which results in
+
+            fmul
+            fmul
+            fadd
+
+            and in
+
+            fmul
+            fma
+
+            when using the fma optimization. On a super scalar architecture, the first instruction
+            sequence requires clock_cycles(fmul)+clock_cycles(fadd) clock cycles because the fmuls can be executed in parallel.
+            The second sequence requires clock_cycles(fmul)+clock_cycles(fma) because the fma has to wait for the
+            result of the fmul. Since typically clock_cycles(fma)>clock_cycles(fadd) applies, the first sequence is better.
+          }
+          (((left.nodetype=muln) and (node_complexity(right)<3)) or
+           ((right.nodetype=muln) and (node_complexity(left)<3)) or
+           ((left.nodetype=inlinen) and
+            (tinlinenode(left).inlinenumber=in_sqr_real) and
+             (node_complexity(right)<3)) or
+           ((right.nodetype=inlinen) and
+            (tinlinenode(right).inlinenumber=in_sqr_real) and
+            (node_complexity(left)<3))
+          ) then
+          begin
+            case tfloatdef(ld).floattype of
+              s32real:
+               inlinennr:=in_fma_single;
+              s64real:
+               inlinennr:=in_fma_double;
+              s80real:
+               inlinennr:=in_fma_extended;
+              s128real:
+               inlinennr:=in_fma_float128;
+              else
+                internalerror(2014042601);
+            end;
+            if left.nodetype=muln then
+              begin
+                if nodetype=subn then
+                  result:=cinlinenode.create(inlinennr,false,ccallparanode.create(cunaryminusnode.create(right),
+                    ccallparanode.create(taddnode(left).right,
+                    ccallparanode.create(taddnode(left).left,nil
+                    ))))
+                else
+                  result:=cinlinenode.create(inlinennr,false,ccallparanode.create(right,
+                    ccallparanode.create(taddnode(left).right,
+                    ccallparanode.create(taddnode(left).left,nil
+                    ))));
+                right:=nil;
+                taddnode(left).right:=nil;
+                taddnode(left).left:=nil;
+              end
+            else if right.nodetype=muln then
+              begin
+                if nodetype=subn then
+                  result:=cinlinenode.create(inlinennr,false,ccallparanode.create(left,
+                    ccallparanode.create(cunaryminusnode.create(taddnode(right).right),
+                    ccallparanode.create(taddnode(right).left,nil
+                    ))))
+                else
+                  result:=cinlinenode.create(inlinennr,false,ccallparanode.create(left,
+                    ccallparanode.create(taddnode(right).right,
+                    ccallparanode.create(taddnode(right).left,nil
+                    ))));
+                left:=nil;
+                taddnode(right).right:=nil;
+                taddnode(right).left:=nil;
+              end
+            else if (left.nodetype=inlinen) and (tinlinenode(left).inlinenumber=in_sqr_real) then
+              begin
+                if nodetype=subn then
+                  result:=cinlinenode.create(inlinennr,false,ccallparanode.create(cunaryminusnode.create(right),
+                    ccallparanode.create(tinlinenode(left).left.getcopy,
+                    ccallparanode.create(tinlinenode(left).left.getcopy,nil
+                    ))))
+                else
+                  result:=cinlinenode.create(inlinennr,false,ccallparanode.create(right,
+                    ccallparanode.create(tinlinenode(left).left.getcopy,
+                    ccallparanode.create(tinlinenode(left).left.getcopy,nil
+                    ))));
+                right:=nil;
+              end
+            { we get here only if right is a sqr node }
+            else if (right.nodetype=inlinen) and (tinlinenode(right).inlinenumber=in_sqr_real) then
+              begin
+                if nodetype=subn then
+                  result:=cinlinenode.create(inlinennr,false,ccallparanode.create(left,
+                    ccallparanode.create(cunaryminusnode.create(tinlinenode(right).left.getcopy),
+                    ccallparanode.create(tinlinenode(right).left.getcopy,nil
+                    ))))
+                else
+                  result:=cinlinenode.create(inlinennr,false,ccallparanode.create(left,
+                    ccallparanode.create(tinlinenode(right).left.getcopy,
+                    ccallparanode.create(tinlinenode(right).left.getcopy,nil
+                    ))));
+                left:=nil;
+              end;
+          end;
+      end;
+
+
     function taddnode.first_add64bitint: tnode;
       var
         procname: string[31];
@@ -2647,10 +2823,6 @@ implementation
 
         if try_make_mul32to64 then
           begin
-            { if the code generator can handle 32 to 64-bit muls, we're done here }
-            if not use_generic_mul32to64 then
-              exit;
-
             { this uses the same criteria for signedness as the 32 to 64-bit mul
               handling in the i386 code generator }
             if is_signed(left.resultdef) and is_signed(right.resultdef) then
@@ -2792,25 +2964,25 @@ implementation
           begin
             case nodetype of
               addn:
-                procname:='ADD';
+                procname:='add';
               muln:
-                procname:='MUL';
+                procname:='mul';
               subn:
-                procname:='SUB';
+                procname:='sub';
               slashn:
-                procname:='DIV';
+                procname:='div';
               ltn:
-                procname:='LT';
+                procname:='lt';
               lten:
-                procname:='LE';
+                procname:='le';
               gtn:
-                procname:='GT';
+                procname:='gt';
               gten:
-                procname:='GE';
+                procname:='ge';
               equaln:
-                procname:='EQ';
+                procname:='eq';
               unequaln:
-                procname:='NE';
+                procname:='ne';
               else
                 begin
                   CGMessage3(type_e_operator_not_supported_for_types,node2opstr(nodetype),left.resultdef.typename,right.resultdef.typename);
@@ -2820,12 +2992,12 @@ implementation
             case tfloatdef(left.resultdef).floattype of
               s32real:
                 begin
-                  procname:=procname+'S';
+                  procname:=procname+'s';
                   if nodetype in [addn,muln,subn,slashn] then
                     procname:=lower(procname);
                 end;
               s64real:
-                procname:=procname+'D';
+                procname:=procname+'d';
               {!!! not yet implemented
               s128real:
               }
@@ -2952,6 +3124,14 @@ implementation
                   internalerror(200103291);
                  expectloc:=LOC_FLAGS;
                end
+             else if (nodetype=muln) and
+                is_64bitint(resultdef) and
+                not use_generic_mul32to64 and
+                try_make_mul32to64 then
+               begin
+                 { if the code generator can handle 32 to 64-bit muls,
+                   we're done here }
+               end
 {$ifndef cpu64bitalu}
               { is there a 64 bit type ? }
              else if (torddef(ld).ordtype in [s64bit,u64bit,scurrency]) then
@@ -2969,7 +3149,8 @@ implementation
              else
                begin
 {$ifdef cpuneedsmulhelper}
-                 if (nodetype=muln) and not(torddef(resultdef).ordtype in [u8bit,s8bit{$ifdef cpu16bitalu},u16bit,s16bit{$endif}]) then
+                 if (nodetype=muln) and not(torddef(resultdef).ordtype in [u8bit,s8bit
+                   {$if defined(cpu16bitalu) or defined(avr)},u16bit,s16bit{$endif}]) then
                    begin
                      result := nil;
 
@@ -3109,6 +3290,10 @@ implementation
                 expectloc:=LOC_FPUREGISTER
               else
                 expectloc:=LOC_FLAGS;
+
+              result:=try_fma(ld,rd);
+              if assigned(result) then
+                exit;
             end
 
          { pointer comperation and subtraction }

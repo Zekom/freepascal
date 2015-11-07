@@ -13,7 +13,7 @@ interface
 
 uses
 {$IFDEF FPC}
-  fpcunit, testutils, testregistry, testdecorator, BufDataset,
+  fpcunit, testregistry, BufDataset,
 {$ELSE FPC}
   TestFramework,
 {$ENDIF FPC}
@@ -39,6 +39,7 @@ type
     procedure TestAutoIncField;
     procedure TestAutoIncFieldStreaming;
     procedure TestAutoIncFieldStreamingXML;
+    Procedure TestRecordCount;
   end;
 
 implementation
@@ -48,7 +49,6 @@ uses
 //
 {$endif fpc}
   variants,
-  strutils,
   FmtBCD;
 
 { TTestSpecificTBufDataset }
@@ -248,6 +248,22 @@ begin
   IntTestAutoIncFieldStreaming(true);
 end;
 
+procedure TTestSpecificTBufDataset.TestRecordCount;
+var
+  BDS:TBufDataSet;
+  
+begin
+  BDS:=TBufDataSet.Create(nil);
+  BDS.FieldDefs.Add('ID',ftLargeint);
+  BDS.CreateDataSet;
+  BDS.AppendRecord([1]);
+  BDS.AppendRecord([2]);
+  BDS.AppendRecord([3]);
+  BDS.Close;
+  AssertEquals('IsEmpty: ',True,BDS.IsEmpty);
+  AssertEquals('RecordCount: ',0,BDS.RecordCount);
+end;
+  
 initialization
 {$ifdef fpc}
 

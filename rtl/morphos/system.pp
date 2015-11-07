@@ -26,6 +26,7 @@ interface
 {$define FPC_IS_SYSTEM}
 
 {$I systemh.inc}
+{$I osdebugh.inc}
 
 const
   LineEnding = #10;
@@ -58,11 +59,13 @@ const
 
 var
   MOS_ExecBase   : Pointer; external name '_ExecBase';
-  MOS_DOSBase    : Pointer;
+  MOS_DOSBase    : Pointer; public name 'AOS_DOSBASE';
+  AOS_DOSBase    : Pointer; external name 'AOS_DOSBASE'; { common Amiga code compatibility kludge }
   MOS_UtilityBase: Pointer;
 
-  MOS_heapPool : Pointer; { pointer for the OS pool for growing the heap }
-  MOS_origDir  : LongInt; { original directory on startup }
+  ASYS_heapPool : Pointer; { pointer for the OS pool for growing the heap }
+  ASYS_fileSemaphore: Pointer; { mutex semaphore for filelist access arbitration }
+  ASYS_origDir  : LongInt; { original directory on startup }
   MOS_ambMsg   : Pointer;
   MOS_ConName  : PChar ='CON:10/30/620/100/FPC Console Output/AUTO/CLOSE/WAIT';
   MOS_ConHandle: LongInt;
@@ -75,6 +78,7 @@ var
 implementation
 
 {$I system.inc}
+{$I osdebug.inc}
 
 {$IFDEF MOSFPC_FILEDEBUG}
 {$WARNING Compiling with file debug enabled!}
@@ -92,7 +96,13 @@ implementation
 procedure haltproc(e:longint);cdecl;external name '_haltproc';
 
 procedure System_exit;
+var
+  oldDirLock: LongInt;
 begin
+  { Dispose the thread init/exit chains }
+  CleanupThreadProcChain(threadInitProcList);
+  CleanupThreadProcChain(threadExitProcList);
+
   { We must remove the CTRL-C FLAG here because halt }
   { may call I/O routines, which in turn might call  }
   { halt, so a recursive stack crash                 }
@@ -102,11 +112,14 @@ begin
   end;
 
   { Closing opened files }
-  CloseList(MOS_fileList);
+  CloseList(ASYS_fileList);
 
   { Changing back to original directory if changed }
-  if MOS_origDir<>0 then begin
-    CurrentDir(MOS_origDir);
+  if ASYS_origDir<>0 then begin
+    oldDirLock:=CurrentDir(ASYS_origDir);
+    { unlock our lock if its safe, so we won't leak the lock }
+    if (oldDirLock<>0) and (oldDirLock<>ASYS_origDir) then
+      Unlock(oldDirLock);
   end;
 
   { Closing CON: when in Ambient mode }
@@ -114,7 +127,7 @@ begin
 
   if MOS_UtilityBase<>nil then CloseLibrary(MOS_UtilityBase);
   if MOS_DOSBase<>nil then CloseLibrary(MOS_DOSBase);
-  if MOS_heapPool<>nil then DeletePool(MOS_heapPool);
+  if ASYS_heapPool<>nil then DeletePool(ASYS_heapPool);
 
   { If in Ambient mode, replying WBMsg }
   if MOS_ambMsg<>nil then begin
@@ -357,18 +370,25 @@ begin
  if MOS_UtilityBase=nil then Halt(1);
 
  { Creating the memory pool for growing heap }
- MOS_heapPool:=CreatePool(MEMF_FAST,growheapsize2,growheapsize1);
- if MOS_heapPool=nil then Halt(1);
+ ASYS_heapPool:=CreatePool(MEMF_FAST or MEMF_SEM_PROTECTED,growheapsize2,growheapsize1);
+ if ASYS_heapPool=nil then Halt(1);
+ 
+ { Initialize semaphore for filelist access arbitration }
+ ASYS_fileSemaphore:=AllocPooled(ASYS_heapPool,sizeof(TSignalSemaphore));
+ if ASYS_fileSemaphore = nil then Halt(1);
+ InitSemaphore(ASYS_fileSemaphore);
 
  if MOS_ambMsg=nil then begin
    MOS_ConHandle:=0;
    StdInputHandle:=dosInput;
    StdOutputHandle:=dosOutput;
+   StdErrorHandle:=StdOutputHandle;
  end else begin
    MOS_ConHandle:=Open(MOS_ConName,MODE_OLDFILE);
    if MOS_ConHandle<>0 then begin
      StdInputHandle:=MOS_ConHandle;
      StdOutputHandle:=MOS_ConHandle;
+     StdErrorHandle:=MOS_ConHandle;
    end else
      Halt(1);
  end;
@@ -381,10 +401,8 @@ begin
   OpenStdIO(Output,fmOutput,StdOutputHandle);
   OpenStdIO(StdOut,fmOutput,StdOutputHandle);
 
-  { * MorphOS doesn't have a separate stderr, just like AmigaOS (???) * }
-  StdErrorHandle:=StdOutputHandle;
-  // OpenStdIO(StdErr,fmOutput,StdErrorHandle);
-  // OpenStdIO(ErrOutput,fmOutput,StdErrorHandle);
+  OpenStdIO(StdErr,fmOutput,StdErrorHandle);
+  OpenStdIO(ErrOutput,fmOutput,StdErrorHandle);
 end;
 
 function GetProcessID: SizeUInt;
@@ -404,8 +422,8 @@ begin
   StackBottom := Sptr - StackLength;
 { OS specific startup }
   MOS_ambMsg:=nil;
-  MOS_origDir:=0;
-  MOS_fileList:=nil;
+  ASYS_origDir:=0;
+  ASYS_fileList:=nil;
   envp:=nil;
   SysInitMorphOS;
 { Set up signals handlers }
@@ -421,5 +439,5 @@ begin
 { Arguments }
   GenerateArgs;
   InitSystemThreads;
-  initvariantmanager;
+  InitSystemDynLibs;
 end.

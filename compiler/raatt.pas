@@ -112,10 +112,7 @@ unit raatt;
          procedure handledollar;virtual;
          procedure HandleTargetDirective;virtual;
        end;
-       tcattreader = class of tattreader;
 
-    var
-      cattreader : tcattreader;
 
   implementation
 
@@ -290,12 +287,24 @@ unit raatt;
            end;
 {$endif POWERPC}
 {$if defined(ARM)}
-           { Thumb-2 instructions can have a .W postfix to indicate 32bit instructions
+           {
+             Thumb-2 instructions can have a .W postfix to indicate 32bit instructions,
+             Also in unified syntax sizes and types are indicated with something like a .<dt> prefix for example
            }
            case c of
              '.':
                begin
-                 actasmpattern:=actasmpattern+c;
+                 if len>1 then
+                   begin
+                     while c in ['A'..'Z','a'..'z','0'..'9','_','.'] do
+                       begin
+                         inc(len);
+                         actasmpattern[len]:=c;
+                         c:=current_scanner.asmgetchar;
+                       end;
+                     actasmpattern[0]:=chr(len);
+                   end;
+                 {actasmpattern:=actasmpattern+c;
                  c:=current_scanner.asmgetchar;
 
                  if upcase(c) = 'W' then
@@ -304,10 +313,22 @@ unit raatt;
                      c:=current_scanner.asmgetchar;
                    end
                  else
-                   internalerror(2010122301);
+                   internalerror(2010122301);}
                end
            end;
 {$endif ARM}
+{$ifdef aarch64}
+           { b.cond }
+           case c of
+             '.':
+               begin
+                 repeat
+                   actasmpattern:=actasmpattern+c;
+                   c:=current_scanner.asmgetchar;
+                 until not(c in ['a'..'z','A'..'Z']);
+               end;
+           end;
+{$endif aarch64}
            { Opcode ? }
            If is_asmopcode(upper(actasmpattern)) then
             Begin
@@ -1221,7 +1242,7 @@ unit raatt;
                Consume(AS_COMMA);
                BuildConstSymbolExpression(true,false,false, symofs,symval,symtyp);
 
-               curList.concat(tai_set.create(symname,symval));
+               curList.concat(tai_symbolpair.create(spk_set,symname,symval));
              end;
 
            AS_WEAK:
@@ -1285,10 +1306,16 @@ unit raatt;
         while (actasmtoken=AS_DOT) do
          begin
            Consume(AS_DOT);
-           if actasmtoken=AS_ID then
-            s:=s+'.'+actasmpattern;
-           if not Consume(AS_ID) then
+
+           { a record field could have the same name as a register }
+           if actasmtoken in [AS_ID,AS_REGISTER] then
+             begin
+               s:=s+'.'+actasmpattern;
+               consume(actasmtoken)
+             end
+           else
             begin
+              Consume(AS_ID);
               RecoverConsume(true);
               break;
             end;

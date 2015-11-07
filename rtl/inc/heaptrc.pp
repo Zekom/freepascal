@@ -30,6 +30,7 @@ interface
 {$endif}
 
 Procedure DumpHeap;
+Procedure DumpHeap(SkipIfNoLeaks : Boolean);
 
 { define EXTRA to add more
   tests :
@@ -85,6 +86,8 @@ const
   printleakedblock: boolean = false;
   printfaultyblock: boolean = false;
   maxprintedblocklength: integer = 128;
+  
+  GlobalSkipIfNoLeaks : Boolean = False;
 
 implementation
 
@@ -292,7 +295,6 @@ end;
 procedure call_stack(pp : pheap_mem_info;var ptext : text);
 var
   i  : ptruint;
-  s: PtrUInt;
 begin
   writeln(ptext,'Call trace for block $',hexstr(pointer(pp)+sizeof(theap_mem_info)),' size ',pp^.size);
   if printleakedblock then
@@ -334,23 +336,14 @@ end;
 
 
 procedure dump_already_free(p : pheap_mem_info;var ptext : text);
-var
-  bp : pointer;
-  pcaddr : codepointer;
 begin
   Writeln(ptext,'Marked memory at $',HexStr(pointer(p)+sizeof(theap_mem_info)),' released');
   call_free_stack(p,ptext);
   Writeln(ptext,'freed again at');
-  bp:=get_frame;
-  pcaddr:=get_pc_addr;
-  get_caller_stackinfo(bp,pcaddr);
-  dump_stack(ptext,bp,pcaddr);
+  dump_stack(ptext,1);
 end;
 
 procedure dump_error(p : pheap_mem_info;var ptext : text);
-var
-  bp : pointer;
-  pcaddr : codepointer;
 begin
   Writeln(ptext,'Marked memory at $',HexStr(pointer(p)+sizeof(theap_mem_info)),' invalid');
   Writeln(ptext,'Wrong signature $',hexstr(p^.sig,8),' instead of ',hexstr(calculate_sig(p),8));
@@ -359,10 +352,7 @@ begin
       write(ptext, 'Block content: ');
       printhex(pointer(p) + sizeof(theap_mem_info), p^.size, ptext);
     end;
-  bp:=get_frame;
-  pcaddr:=get_pc_addr;
-  get_caller_stackinfo(bp,pcaddr);
-  dump_stack(ptext,bp,pcaddr);
+  dump_stack(ptext,1);
 end;
 
 {$ifdef EXTRA}
@@ -382,16 +372,10 @@ end;
 {$endif EXTRA}
 
 procedure dump_wrong_size(p : pheap_mem_info;size : ptruint;var ptext : text);
-var
-  bp : pointer;
-  pcaddr : codepointer;
 begin
   Writeln(ptext,'Marked memory at $',HexStr(pointer(p)+sizeof(theap_mem_info)),' invalid');
   Writeln(ptext,'Wrong size : ',p^.size,' allocated ',size,' freed');
-  bp:=get_frame;
-  pcaddr:=get_pc_addr;
-  get_caller_stackinfo(bp,pcaddr);
-  dump_stack(ptext,bp,pcaddr);
+  dump_stack(ptext,1);
   { the check is done to be sure that the procvar is not overwritten }
   if assigned(p^.extra_info) and
      (p^.extra_info^.check=$12345678) and
@@ -961,8 +945,6 @@ var
 {$ifdef windows}
   datap : pointer;
 {$endif windows}
-  bp : pointer;
-  pcaddr : codepointer;
   ptext : ^text;
 begin
   if p=nil then
@@ -1117,10 +1099,7 @@ begin
       end;
    end;
   writeln(ptext^,'pointer $',hexstr(p),' does not point to valid memory block');
-  bp:=get_frame;
-  pcaddr:=get_pc_addr;
-  get_caller_stackinfo(bp,pcaddr);
-  dump_stack(ptext^,bp,pcaddr);
+  dump_stack(ptext^,1);
   runerror(204);
 end;
 
@@ -1129,6 +1108,12 @@ end;
 *****************************************************************************}
 
 procedure dumpheap;
+
+begin
+  DumpHeap(GlobalSkipIfNoLeaks);
+end;
+
+procedure dumpheap(SkipIfNoLeaks : Boolean);
 var
   pp : pheap_mem_info;
   i : ptrint;
@@ -1143,6 +1128,8 @@ begin
   else
     ptext:=textoutput;
   pp:=loc_info^.heap_mem_root;
+  if ((loc_info^.getmem_size-loc_info^.freemem_size)=0) and SkipIfNoLeaks then 
+    exit;
   Writeln(ptext^,'Heap dump by heaptrc unit');
   Writeln(ptext^,loc_info^.getmem_cnt, ' memory blocks allocated : ',
     loc_info^.getmem_size,'/',loc_info^.getmem8_size);
@@ -1478,17 +1465,56 @@ begin
      end;
    FreeEnvironmentStrings(p);
 end;
-{$else defined(win32) or defined(win64)}
-
-{$ifdef wince}
+{$elseif defined(wince)}
 Function GetEnv(P:string):Pchar;
 begin
   { WinCE does not have environment strings.
     Add some way to specify heaptrc options? }
   GetEnv:=nil;
 end;
-{$else wince}
-
+{$elseif defined(msdos)}
+   type
+     PFarChar=^Char;far;
+     PPFarChar=^PFarChar;
+   var
+     envp: PPFarChar;external name '__fpc_envp';
+Function GetEnv(P:string):string;
+var
+  ep    : ppfarchar;
+  pc    : pfarchar;
+  i     : smallint;
+  found : boolean;
+Begin
+  getenv:='';
+  p:=p+'=';            {Else HOST will also find HOSTNAME, etc}
+  ep:=envp;
+  found:=false;
+  if ep<>nil then
+    begin
+      while (not found) and (ep^<>nil) do
+        begin
+          found:=true;
+          for i:=1 to length(p) do
+            if p[i]<>ep^[i-1] then
+              begin
+                found:=false;
+                break;
+              end;
+          if not found then
+            inc(ep);
+        end;
+    end;
+  if found then
+    begin
+      pc:=ep^+length(p);
+      while pc^<>#0 do
+        begin
+          getenv:=getenv+pc^;
+          Inc(pc);
+        end;
+    end;
+end;
+{$else}
 Function GetEnv(P:string):Pchar;
 {
   Searches the environment for a string with name p and
@@ -1523,8 +1549,7 @@ Begin
   else
    getenv:=nil;
 end;
-{$endif wince}
-{$endif win32}
+{$endif}
 
 procedure LoadEnvironment;
 var
@@ -1540,6 +1565,8 @@ begin
    haltonerror:=false;
   if pos('haltonnotreleased',s)>0 then
    HaltOnNotReleased :=true;
+  if pos('skipifnoleaks',s)>0 then
+   GlobalSkipIfNoLeaks :=true;
   i:=pos('log=',s);
   if i>0 then
    begin

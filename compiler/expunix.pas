@@ -154,7 +154,7 @@ begin
            current_asmdata.asmlists[al_procedures].concat(Tai_symbol.Createname_global(hp2.name^,AT_FUNCTION,0));
            if (cs_create_pic in current_settings.moduleswitches) and
              { other targets need to be checked how it works }
-             (target_info.system in [system_i386_freebsd,system_x86_64_freebsd,system_x86_64_linux,system_i386_linux,system_x86_64_solaris,system_i386_solaris,system_i386_android]) then
+             (target_info.system in [system_i386_freebsd,system_x86_64_freebsd,system_x86_64_linux,system_i386_linux,system_x86_64_solaris,system_i386_solaris,system_i386_android,system_x86_64_dragonfly]) then
              begin
 {$ifdef x86}
                sym:=current_asmdata.RefAsmSymbol(pd.mangledname);
@@ -167,7 +167,7 @@ begin
 {$endif x86}
              end
            else
-             cg.g_external_wrapper(current_asmdata.asmlists[al_procedures],pd,pd.mangledname);
+             hlcg.g_external_wrapper(current_asmdata.asmlists[al_procedures],pd,pd.mangledname);
            current_asmdata.asmlists[al_procedures].concat(Tai_symbol_end.Createname(hp2.name^));
          end;
         exportedsymnames.insert(hp2.name^);

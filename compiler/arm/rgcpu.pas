@@ -28,7 +28,7 @@ unit rgcpu;
   interface
 
      uses
-       aasmbase,aasmtai,aasmdata,aasmcpu,
+       aasmbase,aasmtai,aasmsym,aasmdata,aasmcpu,
        cgbase,cgutils,
        cpubase,
        {$ifdef DEBUG_SPILLING}
@@ -41,9 +41,9 @@ unit rgcpu;
        private
          procedure spilling_create_load_store(list: TAsmList; pos: tai; const spilltemp:treference;tempreg:tregister; is_store: boolean);
        public
-         procedure do_spill_read(list:TAsmList;pos:tai;const spilltemp:treference;tempreg:tregister);override;
-         procedure do_spill_written(list:TAsmList;pos:tai;const spilltemp:treference;tempreg:tregister);override;
-         function do_spill_replace(list : TAsmList;instr : taicpu;
+         procedure do_spill_read(list: TAsmList; pos: tai; const spilltemp: treference; tempreg: tregister; orgsupreg: tsuperregister); override;
+         procedure do_spill_written(list: TAsmList; pos: tai; const spilltemp: treference; tempreg: tregister; orgsupreg: tsuperregister); override;
+         function do_spill_replace(list : TAsmList;instr : tai_cpu_abstract_sym;
            orgreg : tsuperregister;const spilltemp : treference) : boolean;override;
          procedure add_constraints(reg:tregister);override;
          function  get_spill_subreg(r:tregister) : tsubregister;override;
@@ -53,8 +53,8 @@ unit rgcpu;
        private
          procedure SplitITBlock(list:TAsmList;pos:tai);
        public
-         procedure do_spill_read(list:TAsmList;pos:tai;const spilltemp:treference;tempreg:tregister);override;
-         procedure do_spill_written(list:TAsmList;pos:tai;const spilltemp:treference;tempreg:tregister);override;
+         procedure do_spill_read(list: TAsmList; pos: tai; const spilltemp: treference; tempreg: tregister; orgsupreg: tsuperregister); override;
+         procedure do_spill_written(list: TAsmList; pos: tai; const spilltemp: treference; tempreg: tregister; orgsupreg: tsuperregister); override;
        end;
 
        trgintcputhumb2 = class(trgcputhumb2)
@@ -174,7 +174,6 @@ unit rgcpu;
       var
         tmpref : treference;
         helplist : TAsmList;
-        l : tasmlabel;
         hreg : tregister;
         immshift: byte;
         a: aint;
@@ -250,7 +249,7 @@ unit rgcpu;
      end;
 
 
-    procedure trgcpu.do_spill_read(list:TAsmList;pos:tai;const spilltemp:treference;tempreg:tregister);
+    procedure trgcpu.do_spill_read(list: TAsmList; pos: tai; const spilltemp: treference; tempreg: tregister; orgsupreg: tsuperregister);
       begin
         { don't load spilled register between
           mov lr,pc
@@ -269,25 +268,27 @@ unit rgcpu;
         if fix_spilling_offset(spilltemp.offset) then
           spilling_create_load_store(list, pos, spilltemp, tempreg, false)
         else
-          inherited do_spill_read(list,pos,spilltemp,tempreg);
+          inherited;
       end;
 
 
-    procedure trgcpu.do_spill_written(list:TAsmList;pos:tai;const spilltemp:treference;tempreg:tregister);
+    procedure trgcpu.do_spill_written(list: TAsmList; pos: tai; const spilltemp: treference; tempreg: tregister; orgsupreg: tsuperregister);
       begin
         if fix_spilling_offset(spilltemp.offset) then
           spilling_create_load_store(list, pos, spilltemp, tempreg, true)
         else
-          inherited do_spill_written(list,pos,spilltemp,tempreg);
+          inherited;
       end;
 
 
-    function trgcpu.do_spill_replace(list:TAsmList;instr:taicpu;orgreg:tsuperregister;const spilltemp:treference):boolean;
-      var
-        b : byte;
+    function trgcpu.do_spill_replace(list:TAsmList;instr:tai_cpu_abstract_sym;orgreg:tsuperregister;const spilltemp:treference):boolean;
       begin
         result:=false;
         if abs(spilltemp.offset)>4095 then
+          exit;
+
+        { ldr can't set the flags }
+        if taicpu(instr).oppostfix=PF_S then
           exit;
 
         if GenerateThumbCode and
@@ -304,6 +305,11 @@ unit rgcpu;
                    (get_alias(getsupreg(oper[0]^.reg))=orgreg) and
                    (get_alias(getsupreg(oper[1]^.reg))<>orgreg) then
                   begin
+                    { do not replace if we're on Thumb, ldr/str cannot be used with rX>r7 }
+                    if GenerateThumbCode and
+                       (getsupreg(oper[1]^.reg)>RS_R7) then
+                       exit;
+
                     { str expects the register in oper[0] }
                     instr.loadreg(0,oper[1]^.reg);
                     instr.loadref(1,spilltemp);
@@ -314,6 +320,11 @@ unit rgcpu;
                    (get_alias(getsupreg(oper[1]^.reg))=orgreg) and
                    (get_alias(getsupreg(oper[0]^.reg))<>orgreg) then
                   begin
+                    { do not replace if we're on Thumb, ldr/str cannot be used with rX>r7 }
+                    if GenerateThumbCode and
+                       (getsupreg(oper[0]^.reg)>RS_R7) then
+                       exit;
+
                     instr.loadref(1,spilltemp);
                     opcode:=A_LDR;
                     result:=true;
@@ -412,7 +423,7 @@ unit rgcpu;
           list.InsertAfter(taicpu.op_cond(remOp,taicpu(hp).oper[0]^.cc), pos);
       end;
 
-    procedure trgcputhumb2.do_spill_read(list:TAsmList;pos:tai;const spilltemp:treference;tempreg:tregister);
+    procedure trgcputhumb2.do_spill_read(list:TAsmList;pos:tai;const spilltemp:treference;tempreg:tregister;orgsupreg:tsuperregister);
       var
         tmpref : treference;
         helplist : TAsmList;
@@ -480,11 +491,11 @@ unit rgcpu;
             helplist.free;
           end
         else
-          inherited do_spill_read(list,pos,spilltemp,tempreg);
+          inherited;
       end;
 
 
-    procedure trgcputhumb2.do_spill_written(list:TAsmList;pos:tai;const spilltemp:treference;tempreg:tregister);
+    procedure trgcputhumb2.do_spill_written(list:TAsmList;pos:tai;const spilltemp:treference;tempreg:tregister;orgsupreg:tsuperregister);
       var
         tmpref : treference;
         helplist : TAsmList;
@@ -538,7 +549,7 @@ unit rgcpu;
             helplist.free;
           end
         else
-          inherited do_spill_written(list,pos,spilltemp,tempreg);
+          inherited;
       end;
 
 
@@ -565,9 +576,9 @@ unit rgcpu;
               A_SMULL,
               A_SMLAL:
                 begin
+                  add_edge(getsupreg(taicpu(p).oper[0]^.reg),getsupreg(taicpu(p).oper[1]^.reg));
                   if current_settings.cputype<cpu_armv6 then
                     begin
-                      add_edge(getsupreg(taicpu(p).oper[0]^.reg),getsupreg(taicpu(p).oper[1]^.reg));
                       add_edge(getsupreg(taicpu(p).oper[1]^.reg),getsupreg(taicpu(p).oper[2]^.reg));
                       add_edge(getsupreg(taicpu(p).oper[0]^.reg),getsupreg(taicpu(p).oper[2]^.reg));
                     end;
@@ -597,8 +608,7 @@ unit rgcpu;
     procedure trgintcputhumb.add_cpu_interferences(p: tai);
       var
         r : tregister;
-        i,
-        hr : longint;
+        i : longint;
       begin
         if p.typ=ait_instruction then
           begin

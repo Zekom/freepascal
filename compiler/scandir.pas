@@ -1203,7 +1203,7 @@ unit scandir;
     procedure dir_smartlink;
       begin
         do_moduleswitch(cs_create_smart);
-        if (paratargetdbg in [dbg_dwarf2,dbg_dwarf3]) and
+        if (target_dbg.id in [dbg_dwarf2,dbg_dwarf3]) and
             not(target_info.system in (systems_darwin+[system_i8086_msdos])) and
             { smart linking does not yet work with DWARF debug info on most targets }
             (cs_create_smart in current_settings.moduleswitches) and
@@ -1279,6 +1279,11 @@ unit scandir;
             current_scanner.readid;
             value:=orgpattern;
             UpdateTargetSwitchStr(name+'='+value,current_settings.targetswitches,current_module.in_global);
+          end
+        else if c='-' then
+          begin
+            current_scanner.readchar;
+            UpdateTargetSwitchStr(name+'-',current_settings.targetswitches,current_module.in_global);
           end
         else
           UpdateTargetSwitchStr(name,current_settings.targetswitches,current_module.in_global);
@@ -1654,6 +1659,9 @@ unit scandir;
               Message1(option_code_page_not_available,s)
             else
               current_settings.sourcecodepage:=codepagebyname(s);
+            { we're not using the system code page now }
+            exclude(current_settings.modeswitches,m_systemcodepage);
+            exclude(current_settings.moduleswitches,cs_system_codepage);
             include(current_settings.moduleswitches,cs_explicit_codepage);
           end;
       end;

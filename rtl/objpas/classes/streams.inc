@@ -159,10 +159,6 @@ end;
 
   procedure TStream.FakeSeekForward(Offset: Int64;  const Origin: TSeekOrigin; const Pos: Int64);
 
-  var
-    Buffer: Pointer;
-    BufferSize, i: LongInt;
-
   begin
     if Origin=soBeginning then
        Dec(Offset,Pos);
@@ -184,15 +180,31 @@ end;
 
   procedure TStream.ReadBuffer(var Buffer; Count: Longint);
 
-    begin
-       if Read(Buffer,Count)<Count then
-         Raise EReadError.Create(SReadError);
-    end;
+  Var
+    r,t : longint;
+
+  begin
+    t:=0;
+    repeat
+      r:=Read(PByte(@Buffer)[t],Count-t);
+      inc(t,r);
+    until (t=Count) or (r<=0);
+    if (t<Count) then
+      Raise EReadError.Create(SReadError);
+  end;
 
   procedure TStream.WriteBuffer(const Buffer; Count: Longint);
 
+  var
+    r,t : Longint;
+
     begin
-       if Write(Buffer,Count)<Count then
+      T:=0;
+      Repeat
+         r:=Write(PByte(@Buffer)[t],Count-t);
+         inc(t,r);
+      Until (t=count) or (r<=0);
+      if (t<Count) then
          Raise EWriteError.Create(SWriteError);
     end;
 
@@ -817,8 +829,11 @@ begin
   Result:=Length(FDataString)-FPosition;
   If Result>Count then Result:=Count;
   // This supposes FDataString to be of type AnsiString !
-  Move (Pchar(FDataString)[FPosition],Buffer,Result);
-  FPosition:=FPosition+Result;
+  if Result>0 then
+   begin
+   Move (Pchar(FDataString)[FPosition],Buffer,Result);
+   FPosition:=FPosition+Result;
+   end;
 end;
 
 
